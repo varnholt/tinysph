@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  library:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows MSVC
+            os: windows-latest
+            configure: ""
+          - name: Linux GCC 14
+            os: ubuntu-24.04
+            configure: -DCMAKE_CXX_COMPILER=g++-14
+          - name: Linux Clang 18
+            os: ubuntu-24.04
+            configure: -DCMAKE_CXX_COMPILER=clang++-18
+          - name: macOS AppleClang
+            os: macos-15
+            configure: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install TBB (parallel algorithms for libstdc++)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libtbb-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTINYSPH_BUILD_SANDBOX=OFF ${{ matrix.configure }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Example
+        shell: bash
+        run: |
+          if [ -f build/examples/Release/hello_fluid.exe ]; then build/examples/Release/hello_fluid.exe; else build/examples/hello_fluid; fi
+
+      - name: Install and consume with find_package
+        shell: bash
+        run: |
+          cmake --install build --config Release --prefix "$PWD/install"
+          mkdir consumer
+          cat > consumer/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.25)
+          project(consumer LANGUAGES CXX)
+          find_package(tinysph 0.1 REQUIRED)
+          add_executable(consumer main.cpp)
+          target_link_libraries(consumer PRIVATE tinysph::tinysph)
+          EOF
+          cat > consumer/main.cpp <<'EOF'
+          #include <chrono>
+          #include <print>
+          #include <tinysph/tinysph.h>
+          int main()
+          {
+             using namespace std::chrono_literals;
+             tinysph::World world;
+             world.addFluid(tinysph::Sphere{{0.5f, 0.5f, 0.5f}, 0.1f});
+             world.step(100ms);
+             std::println("consumer ok: {} particles", world.particleCount());
+          }
+          EOF
+          cmake -S consumer -B consumer/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/install" ${{ matrix.configure }}
+          cmake --build consumer/build --config Release
+          if [ -f consumer/build/Release/consumer.exe ]; then consumer/build/Release/consumer.exe; else consumer/build/consumer; fi
+
+  sandbox:
+    name: Sandbox (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DTINYSPH_BUILD_TESTS=OFF -DTINYSPH_BUILD_EXAMPLES=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel --target tinysph_sandbox
