@@ -97,7 +97,7 @@ wheels = [
 ]
 
 [[package]]
-name = "sph-sandbox-tools"
+name = "tinysph-tools"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [

@@ -1,6 +1,6 @@
-# SPH Sandbox
+# tinysph
 
-An interactive sandbox for smoothed particle hydrodynamics: set up a scene with fluid volumes,
+A tiny C++23 library for smoothed particle hydrodynamics (SPH), plus an interactive sandbox: set up a scene with fluid volumes,
 colliders, emitters and force fields, then poke the water with the mouse.
 
 It started as a port of [smoothed_particle_hydrodynamics](https://github.com/varnholt/smoothed_particle_hydrodynamics)
