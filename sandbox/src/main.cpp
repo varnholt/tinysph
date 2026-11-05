@@ -1,5 +1,10 @@
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <optional>
+#include <ranges>
+#include <span>
+#include <string_view>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -37,7 +42,7 @@ mouseOnTargetPlane(const OrbitCamera& camera, float mouse_x, float mouse_y, floa
 
 }  // namespace
 
-int main(int, char**)
+int main(int argument_count, char** arguments)
 {
    if (!SDL_Init(SDL_INIT_VIDEO))
    {
@@ -97,6 +102,21 @@ int main(int, char**)
    }
 
    SandboxState state;
+   // --preset <index> starts with another scene, --spheres with sphere rendering, e.g. for screenshots
+   const std::span<char*> argument_list{arguments, static_cast<std::size_t>(argument_count)};
+   for (const auto [argument, value] : std::views::zip(argument_list, argument_list | std::views::drop(1)))
+   {
+      if (std::string_view{argument} == "--preset")
+      {
+         state._preset_index = std::clamp(std::atoi(value), 0, presetCount() - 1);
+      }
+   }
+   if (std::ranges::contains(
+          argument_list | std::views::transform([](const char* argument) { return std::string_view{argument}; }), "--spheres"
+       ))
+   {
+      state._render_settings._render_mode = RenderMode::Spheres;
+   }
    loadPreset(state, state._preset_index);
    state._rebuild_requested = false;
    auto world = buildWorld(state._scene, state._particle_spacing, state._parameters);
