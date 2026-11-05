@@ -224,8 +224,9 @@ void drawCollidersSection(tinysph::World& world, SandboxState& state)
    }
 
    std::optional<std::ptrdiff_t> remove_index;
-   for (auto&& [collider_index, collider] : std::views::enumerate(colliders))
+   for (auto collider_index = std::ptrdiff_t{0}; collider_index < std::ssize(colliders); ++collider_index)
    {
+      auto& collider = colliders[static_cast<std::size_t>(collider_index)];
       const auto is_sphere = std::holds_alternative<tinysph::Sphere>(collider._shape);
       const auto label = std::string{is_sphere ? "sphere " : "box "} + std::to_string(collider_index);
       auto changed = false;
@@ -272,8 +273,9 @@ void drawForceFieldsSection(tinysph::World& world, SandboxState& state)
    }
 
    std::optional<std::ptrdiff_t> remove_index;
-   for (auto&& [field_index, field] : std::views::enumerate(fields))
+   for (auto field_index = std::ptrdiff_t{0}; field_index < std::ssize(fields); ++field_index)
    {
+      auto& field = fields[static_cast<std::size_t>(field_index)];
       const auto type_name = std::visit(
          Overloaded{
             [](const tinysph::Attractor&) { return "attractor "; },
@@ -351,8 +353,9 @@ void drawEmittersSection(tinysph::World& world, SandboxState& state)
    }
 
    std::optional<std::ptrdiff_t> remove_index;
-   for (auto&& [emitter_index, emitter] : std::views::enumerate(emitters))
+   for (auto emitter_index = std::ptrdiff_t{0}; emitter_index < std::ssize(emitters); ++emitter_index)
    {
+      auto& emitter = emitters[static_cast<std::size_t>(emitter_index)];
       auto changed = false;
       const auto remove_requested = listEntry(
          "emitter " + std::to_string(emitter_index),

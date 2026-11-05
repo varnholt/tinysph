@@ -336,9 +336,12 @@ void Renderer::render(
    // the view matrix rotation maps world to view; its transpose maps view to world
    std::array<float, 9> view_to_world{};
    const auto axes = std::views::iota(0uz, 3uz);
-   for (const auto [column, row] : std::views::cartesian_product(axes, axes))
+   for (const auto column : axes)
    {
-      view_to_world[column * 3 + row] = view[row, column];
+      for (const auto row : axes)
+      {
+         view_to_world[column * 3 + row] = view[row, column];
+      }
    }
    const tinysph::Vec3 sun_world{0.3904f, 0.7807f, 0.4880f};
    const tinysph::Vec3 light_view{
@@ -408,7 +411,9 @@ void Renderer::render(
       glDrawArrays(GL_TRIANGLES, _floor_vertex_count, vertex_count - _floor_vertex_count);
    }
 
-   glEnable(GL_PROGRAM_POINT_SIZE);
+#if !defined(__EMSCRIPTEN__)
+   glEnable(GL_PROGRAM_POINT_SIZE);  // always on in gles / webgl
+#endif
    if (!fluid_surface)
    {
       // 2a) spheres straight into the window
@@ -585,9 +590,11 @@ void Renderer::uploadParticles(const tinysph::World& world, const RenderSettings
    const auto rest_density = world.settings()._rest_density;
 
    _particle_data.resize(positions.size() * particle_stride);
-   for (const auto [particle_index, particle] : std::views::enumerate(std::views::zip(positions, velocities, densities)))
+   for (const auto particle_index : std::views::iota(0uz, positions.size()))
    {
-      const auto& [position, velocity, density] = particle;
+      const auto& position = positions[particle_index];
+      const auto& velocity = velocities[particle_index];
+      const auto density = densities[particle_index];
       auto color_value = 0.0f;
       switch (settings._color_mode)
       {

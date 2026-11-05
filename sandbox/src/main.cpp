@@ -10,6 +10,10 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+#endif
 #include <imgui.h>
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
@@ -42,6 +46,67 @@ mouseOnTargetPlane(const OrbitCamera& camera, float mouse_x, float mouse_y, floa
    return ray._origin + ray._direction * distance;
 }
 
+#if defined(__EMSCRIPTEN__)
+EM_JS(int32_t, browserWidth, (), { return window.innerWidth; });
+EM_JS(int32_t, browserHeight, (), { return window.innerHeight; });
+#endif
+
+/// \brief quits sdl when destroyed; the first member of App, so it goes after the window and the context.
+struct SdlSession
+{
+   SdlSession() = default;
+   SdlSession(const SdlSession&) = delete;
+   SdlSession& operator=(const SdlSession&) = delete;
+   ~SdlSession()
+   {
+      SDL_Quit();
+   }
+};
+
+struct GlContextDeleter
+{
+   void operator()(SDL_GLContext context) const
+   {
+      SDL_GL_DestroyContext(context);
+   }
+};
+
+/// \brief everything the frame loop needs. it lives on the heap, because in the browser main() returns before the
+///        first frame and the browser calls frame() from then on.
+struct App
+{
+   App() = default;
+   App(const App&) = delete;
+   App& operator=(const App&) = delete;
+   ~App();
+
+   /// \brief handles events, steps the simulation and draws one frame.
+   /// \return false when the window was closed
+   bool frame();
+
+   SdlSession _sdl_session;
+   std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> _window{nullptr, &SDL_DestroyWindow};
+   std::unique_ptr<std::remove_pointer_t<SDL_GLContext>, GlContextDeleter> _gl_context;
+   bool _imgui_initialized{false};
+   Renderer _renderer;
+   SandboxState _state;
+   std::optional<tinysph::World> _world;
+   OrbitCamera _camera;
+   std::optional<tinysph::ForceFieldId> _mouse_field_id;  //!< the mouse tool is a force field that exists while the button is held
+   std::chrono::steady_clock::time_point _previous_frame{std::chrono::steady_clock::now()};
+};
+
+App::~App()
+{
+   if (_imgui_initialized)
+   {
+      _renderer.shutdown();
+      ImGui_ImplOpenGL3_Shutdown();
+      ImGui_ImplSDL3_Shutdown();
+      ImGui::DestroyContext();
+   }
+}
+
 }  // namespace
 
 int main(int argument_count, char** arguments)
@@ -51,24 +116,19 @@ int main(int argument_count, char** arguments)
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_Init failed: %s", SDL_GetError());
       return 1;
    }
-
-   // declared first, so it is destroyed last: sdl quits after the window and the context are gone
-   struct SdlSession
-   {
-      SdlSession() = default;
-      SdlSession(const SdlSession&) = delete;
-      SdlSession& operator=(const SdlSession&) = delete;
-      ~SdlSession()
-      {
-         SDL_Quit();
-      }
-   };
-   const SdlSession sdl_session;
+   auto app = std::make_unique<App>();
 
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+#if defined(__EMSCRIPTEN__)
+   // webgl 2
+   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#else
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+#endif
    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
@@ -76,29 +136,30 @@ int main(int argument_count, char** arguments)
 
    const auto display_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
    const auto window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#if defined(__EMSCRIPTEN__)
+   // the canvas fills the browser window, frame() follows when it is resized
+   const auto window_width = browserWidth();
+   const auto window_height = browserHeight();
+#else
+   const auto window_width = static_cast<int32_t>(1600 * display_scale);
+   const auto window_height = static_cast<int32_t>(900 * display_scale);
+#endif
    // sdl objects are owned by unique_ptr, so every early return cleans up
-   const std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{
-      SDL_CreateWindow(
-         "tinysph sandbox", static_cast<int32_t>(1600 * display_scale), static_cast<int32_t>(900 * display_scale), window_flags
-      ),
-      &SDL_DestroyWindow
-   };
-   if (window == nullptr)
+   app->_window.reset(SDL_CreateWindow("tinysph sandbox", window_width, window_height, window_flags));
+   if (app->_window == nullptr)
    {
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_CreateWindow failed: %s", SDL_GetError());
       return 1;
    }
+   auto* const window = app->_window.get();
 
-   const auto destroy_context = [](SDL_GLContext context) { SDL_GL_DestroyContext(context); };
-   const std::unique_ptr<std::remove_pointer_t<SDL_GLContext>, decltype(destroy_context)> gl_context{
-      SDL_GL_CreateContext(window.get()), destroy_context
-   };
-   if (gl_context == nullptr)
+   app->_gl_context.reset(SDL_GL_CreateContext(window));
+   if (app->_gl_context == nullptr)
    {
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_GL_CreateContext failed: %s", SDL_GetError());
       return 1;
    }
-   SDL_GL_MakeCurrent(window.get(), gl_context.get());
+   SDL_GL_MakeCurrent(window, app->_gl_context.get());
    SDL_GL_SetSwapInterval(1);
 
    if (!gl::load())
@@ -114,16 +175,21 @@ int main(int argument_count, char** arguments)
    auto& style = ImGui::GetStyle();
    style.ScaleAllSizes(display_scale);
    style.FontScaleDpi = display_scale;
-   ImGui_ImplSDL3_InitForOpenGL(window.get(), gl_context.get());
+   ImGui_ImplSDL3_InitForOpenGL(window, app->_gl_context.get());
+#if defined(__EMSCRIPTEN__)
+   ImGui_ImplOpenGL3_Init("#version 300 es");
+   io.IniFilename = nullptr;  // no file system to keep window positions in
+#else
    ImGui_ImplOpenGL3_Init("#version 330 core");
+#endif
+   app->_imgui_initialized = true;
 
-   Renderer renderer;
-   if (!renderer.initialize())
+   if (!app->_renderer.initialize())
    {
       return 1;
    }
 
-   SandboxState state;
+   auto& state = app->_state;
    // --preset <index> starts with another scene, --spheres with sphere rendering, --zoom <wheel steps> moves the camera in, --tilt
    // <radians> changes its pitch, --gpu simulates on the gpu
    const std::span<char*> argument_list{arguments, static_cast<std::size_t>(argument_count)};
@@ -164,19 +230,46 @@ int main(int argument_count, char** arguments)
    }
    loadPreset(state, state._preset_index);
    state._rebuild_requested = false;
-   auto world = buildWorld(state._scene, state._particle_spacing, state._backend, state._parameters);
+   app->_world.emplace(buildWorld(state._scene, state._particle_spacing, state._backend, state._parameters));
 
-   OrbitCamera camera;
-   camera.frame(state._scene._domain);
-   camera.zoom(zoom_steps);
-   camera.orbit(0.0f, tilt);
+   app->_camera.frame(state._scene._domain);
+   app->_camera.zoom(zoom_steps);
+   app->_camera.orbit(0.0f, tilt);
 
-   // the mouse tool is an ordinary force field that exists while the button is held
-   std::optional<tinysph::ForceFieldId> mouse_field_id;
+#if defined(__EMSCRIPTEN__)
+   // the browser owns the loop: frame() runs once per animation frame, main() returns right away and the app lives on
+   emscripten_set_main_loop_arg([](void* user_data) { static_cast<App*>(user_data)->frame(); }, app.release(), 0, false);
+#else
+   while (app->frame())
+   {
+   }
+#endif
+   return 0;
+}
+
+namespace
+{
+
+bool App::frame()
+{
+   auto& state = _state;
+   auto& world = *_world;
+   auto& camera = _camera;
+   auto& mouse_field_id = _mouse_field_id;
+   auto* const window = _window.get();
+   const auto& io = ImGui::GetIO();
+
+#if defined(__EMSCRIPTEN__)
+   auto window_width = 0;
+   auto window_height = 0;
+   SDL_GetWindowSize(window, &window_width, &window_height);
+   if (window_width != browserWidth() || window_height != browserHeight())
+   {
+      SDL_SetWindowSize(window, browserWidth(), browserHeight());
+   }
+#endif
 
    auto running = true;
-   auto previous_frame = std::chrono::steady_clock::now();
-   while (running)
    {
       SDL_Event event;
       while (SDL_PollEvent(&event))
@@ -188,7 +281,7 @@ int main(int argument_count, char** arguments)
                running = false;
                break;
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-               if (event.window.windowID == SDL_GetWindowID(window.get()))
+               if (event.window.windowID == SDL_GetWindowID(window))
                {
                   running = false;
                }
@@ -252,7 +345,7 @@ int main(int argument_count, char** arguments)
       {
          auto window_width = 0;
          auto window_height = 0;
-         SDL_GetWindowSize(window.get(), &window_width, &window_height);
+         SDL_GetWindowSize(window, &window_width, &window_height);
          const auto point =
             mouseOnTargetPlane(camera, mouse_x, mouse_y, static_cast<float>(window_width), static_cast<float>(window_height));
          if (point.has_value())
@@ -291,20 +384,17 @@ int main(int argument_count, char** arguments)
 
       auto framebuffer_width = 0;
       auto framebuffer_height = 0;
-      SDL_GetWindowSizeInPixels(window.get(), &framebuffer_width, &framebuffer_height);
-      renderer.render(world, state._scene, camera, framebuffer_width, framebuffer_height, state._render_settings, mouse_attractor);
-      state._mesh_time = renderer.meshBuildTime();
+      SDL_GetWindowSizeInPixels(window, &framebuffer_width, &framebuffer_height);
+      _renderer.render(world, state._scene, camera, framebuffer_width, framebuffer_height, state._render_settings, mouse_attractor);
+      state._mesh_time = _renderer.meshBuildTime();
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-      SDL_GL_SwapWindow(window.get());
+      SDL_GL_SwapWindow(window);
 
       const auto now = std::chrono::steady_clock::now();
-      state._frame_time = std::chrono::duration_cast<tinysph::Milliseconds>(now - previous_frame);
-      previous_frame = now;
+      state._frame_time = std::chrono::duration_cast<tinysph::Milliseconds>(now - _previous_frame);
+      _previous_frame = now;
    }
-
-   renderer.shutdown();
-   ImGui_ImplOpenGL3_Shutdown();
-   ImGui_ImplSDL3_Shutdown();
-   ImGui::DestroyContext();
-   return 0;
+   return running;
 }
+
+}  // namespace

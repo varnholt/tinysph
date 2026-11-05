@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+   <meta charset="utf-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1">
+   <title>tinysph sandbox</title>
+   <meta name="description" content="Smoothed particle hydrodynamics in the browser: the tinysph sandbox, compiled to WebAssembly.">
+   <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #101418; color: #c8d0d8; font: 14px system-ui, sans-serif; }
+      canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+      #status { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+      #source { position: fixed; right: 12px; bottom: 10px; color: #8fb4d8; text-decoration: none; opacity: 0.8; }
+      #source:hover { opacity: 1; text-decoration: underline; }
+   </style>
+</head>
+<body>
+   <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+   <div id="status">loading the simulation...</div>
+   <a id="source" href="https://github.com/varnholt/tinysph" target="_blank" rel="noopener">tinysph on GitHub</a>
+   <script>
+      const status = document.getElementById("status");
+      if (!document.createElement("canvas").getContext("webgl2")) {
+         status.textContent = "this demo needs WebGL 2, which this browser does not offer";
+      }
+      var Module = {
+         canvas: document.getElementById("canvas"),
+         setStatus: (text) => { status.textContent = text; },
+         monitorRunDependencies: () => {},
+         onRuntimeInitialized: () => { status.style.display = "none"; },
+         onAbort: (reason) => { status.style.display = "flex"; status.textContent = "the simulation stopped: " + reason; },
+      };
+   </script>
+   {{{ SCRIPT }}}
+</body>
+</html>
