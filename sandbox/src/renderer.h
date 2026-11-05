@@ -53,6 +53,9 @@ class Renderer
 {
 public:
    [[nodiscard]] bool initialize();
+
+   /// rief cpu time of the last surface mesh build, zero in the other render modes
+   [[nodiscard]] tinysph::Milliseconds meshBuildTime() const;
    void shutdown();
 
    void render(
@@ -109,6 +112,7 @@ private:
    uint32_t _surface_buffer{0};
    uint32_t _surface_thickness_framebuffer{0};  //!< thickness without the scene depth attached, it is sampled instead
    SurfaceMesher _mesher;
+   tinysph::Milliseconds _mesh_build_time{};
    uint32_t _line_program{0};
 
    // geometry

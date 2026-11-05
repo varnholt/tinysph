@@ -47,6 +47,7 @@ struct SandboxState
    int32_t _preset_index{0};
    tinysph::StepStatistics _statistics;
    tinysph::Milliseconds _frame_time{};
+   tinysph::Milliseconds _mesh_time{};
    RenderSettings _render_settings;
    MouseTool _mouse_tool;
    FluidDraft _fluid_draft;
