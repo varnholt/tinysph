@@ -36,8 +36,9 @@ struct FluidDraft
 struct SandboxState
 {
    SandboxScene _scene;
-   tinysph::FluidParameters _parameters;  //!< pushed to the world every frame
-   float _particle_spacing{0.025f};       //!< applied when the world is rebuilt
+   tinysph::FluidParameters _parameters;              //!< pushed to the world every frame
+   float _particle_spacing{0.025f};                   //!< applied when the world is rebuilt
+   tinysph::Backend _backend{tinysph::Backend::Cpu};  //!< applied when the world is rebuilt
 
    bool _running{true};
    bool _rebuild_requested{false};  //!< rebuild the world from _scene (reset, preset, spacing)

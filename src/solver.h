@@ -60,6 +60,12 @@ public:
 
    [[nodiscard]] float computeTimeStep() const;
 
+   /// rief the adaptive time step for the given maximum speed and acceleration of all particles.
+   [[nodiscard]] float computeTimeStep(float max_speed, float max_acceleration) const;
+
+   /// rief fills the density and speed statistics from the current particle data.
+   void fillStatistics(StepStatistics& statistics) const;
+
    /// \brief sorts the particles into the grid. step() does this itself; exposed for tests.
    void rebuildGrid();
 
@@ -79,6 +85,8 @@ public:
    [[nodiscard]] float maxSpeed() const;
 
 private:
+   friend class GpuSolver;  // keeps the particle data on the host in sync and runs the emitters
+
    struct CellCoordinate
    {
       int32_t x{0};

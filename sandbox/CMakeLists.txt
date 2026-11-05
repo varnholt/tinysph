@@ -66,12 +66,14 @@ add_executable(
     src/sandbox_scene.h
     src/sandbox_ui.cpp
     src/sandbox_ui.h
+    src/shader_sources.h
     src/surface_mesher.cpp
-    src/surface_mesher.h
-    src/shader_sources.h)
+    src/surface_mesher.h)
 target_link_libraries(tinysph_sandbox PRIVATE tinysph::tinysph tinysph_warnings imgui
                                               SDL3::SDL3-static OpenGL::GL)
 
 if(WIN32)
     set_target_properties(tinysph_sandbox PROPERTIES WIN32_EXECUTABLE ON)
 endif()
+
+tinysph_copy_runtime_dlls(tinysph_sandbox)

@@ -215,14 +215,7 @@ StepStatistics Solver::advance(float frame_time, int32_t max_substeps)
       ++statistics._substeps;
    }
 
-   if (!_densities.empty())
-   {
-      const auto density_sum = std::reduce(_densities.begin(), _densities.end(), 0.0);
-      statistics._average_density_ratio =
-         static_cast<float>(density_sum / static_cast<double>(_densities.size())) / _settings._rest_density;
-      statistics._max_density_ratio = std::ranges::max(_densities) / _settings._rest_density;
-   }
-   statistics._max_speed = maxSpeed();
+   fillStatistics(statistics);
 
    const auto elapsed = std::chrono::steady_clock::now() - start_time;
    statistics._wall_time = std::chrono::duration_cast<Milliseconds>(elapsed);
@@ -247,19 +240,36 @@ void Solver::step(float time_step)
 
 float Solver::computeTimeStep() const
 {
+   return computeTimeStep(maxSpeed(), _max_acceleration);
+}
+
+float Solver::computeTimeStep(float max_speed, float max_acceleration) const
+{
    const auto support_radius = _kernels.supportRadius();
    auto time_step = _parameters._max_time_step.count();
 
    // cfl condition: no information may travel further than a fraction of h per step
-   time_step = std::min(time_step, _parameters._cfl_number * support_radius / (_parameters._speed_of_sound + maxSpeed()));
+   time_step = std::min(time_step, _parameters._cfl_number * support_radius / (_parameters._speed_of_sound + max_speed));
 
    // force condition: a particle starting at rest may not move further than a fraction of h per step
-   if (_max_acceleration > 0.0f)
+   if (max_acceleration > 0.0f)
    {
-      time_step = std::min(time_step, 0.25f * std::sqrt(support_radius / _max_acceleration));
+      time_step = std::min(time_step, 0.25f * std::sqrt(support_radius / max_acceleration));
    }
 
    return time_step;
+}
+
+void Solver::fillStatistics(StepStatistics& statistics) const
+{
+   if (!_densities.empty())
+   {
+      const auto density_sum = std::reduce(_densities.begin(), _densities.end(), 0.0);
+      statistics._average_density_ratio =
+         static_cast<float>(density_sum / static_cast<double>(_densities.size())) / _settings._rest_density;
+      statistics._max_density_ratio = std::ranges::max(_densities) / _settings._rest_density;
+   }
+   statistics._max_speed = maxSpeed();
 }
 
 void Solver::setupGrid()

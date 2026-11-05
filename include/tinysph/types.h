@@ -102,6 +102,7 @@ enum class EmitterId : uint32_t
 enum class Backend : int32_t
 {
    Cpu = 0,  //!< multithreaded through the standard parallel algorithms where available
+   Gpu = 1,  //!< webgpu compute shaders (vulkan, metal, d3d12); only available when built with TINYSPH_GPU
 };
 
 /// \brief fixed for the lifetime of a world. everything is in si units (m, kg, s).
@@ -140,6 +141,7 @@ enum class SettingsError : int32_t
    TooManyGridCells,        //!< the domain is too large for the spacing
    ZeroParticleCap,         //!< _max_particles must be > 0
    UnsupportedBackend,      //!< the requested backend is not built in
+   GpuUnavailable,          //!< the gpu backend is built in, but no usable gpu was found at runtime
 };
 
 [[nodiscard]] constexpr std::string_view describe(SettingsError error)
@@ -160,6 +162,8 @@ enum class SettingsError : int32_t
          return "particle cap must be greater than zero";
       case SettingsError::UnsupportedBackend:
          return "backend is not available in this build";
+      case SettingsError::GpuUnavailable:
+         return "no usable gpu found";
    }
    return "unknown error";
 }

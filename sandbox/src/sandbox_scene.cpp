@@ -1,6 +1,8 @@
 #include "sandbox_scene.h"
 
 #include <array>
+#include <cstdio>
+#include <print>
 
 namespace
 {
@@ -66,9 +68,18 @@ constexpr std::array<Preset, 4> presets{{
 
 }  // namespace
 
-tinysph::World buildWorld(SandboxScene& scene, float particle_spacing, const tinysph::FluidParameters& parameters)
+tinysph::World
+buildWorld(SandboxScene& scene, float particle_spacing, tinysph::Backend& backend, const tinysph::FluidParameters& parameters)
 {
-   tinysph::World world{{._domain = scene._domain, ._particle_spacing = particle_spacing}, parameters};
+   const tinysph::WorldSettings settings{._domain = scene._domain, ._particle_spacing = particle_spacing, ._backend = backend};
+   auto created = tinysph::World::create(settings, parameters);
+   if (!created && backend != tinysph::Backend::Cpu)
+   {
+      std::println(stderr, "gpu backend: {}, using the cpu", tinysph::describe(created.error()));
+      backend = tinysph::Backend::Cpu;
+      created = tinysph::World::create({._domain = scene._domain, ._particle_spacing = particle_spacing}, parameters);
+   }
+   auto world = std::move(created.value());
 
    // colliders first, so fluid is not spawned inside them
    for (auto& collider : scene._colliders)

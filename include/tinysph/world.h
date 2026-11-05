@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 
 #include "tinysph/math.h"
 #include "tinysph/types.h"
@@ -42,7 +43,8 @@ public:
    [[nodiscard]] static std::expected<void, SettingsError> validate(const WorldSettings& settings);
 
    /// \brief creates a world from settings that are known to be valid.
-   ///        invalid settings throw std::invalid_argument, or terminate when exceptions are disabled.
+   ///        invalid settings throw std::invalid_argument, a missing gpu throws std::runtime_error;
+   ///        both terminate when exceptions are disabled.
    explicit World(const WorldSettings& settings = {}, const FluidParameters& parameters = {});
    ~World();
    World(World&& other) noexcept;
@@ -55,6 +57,9 @@ public:
    // ------------------------------------------------------------------------------------------------
 
    [[nodiscard]] const WorldSettings& settings() const;
+
+   /// rief what the simulation runs on, e.g. "cpu" or "NVIDIA GeForce RTX 4070 (vulkan)".
+   [[nodiscard]] std::string_view deviceDescription() const;
 
    [[nodiscard]] const FluidParameters& parameters() const;
    void setParameters(const FluidParameters& parameters);
@@ -117,6 +122,7 @@ public:
 
 private:
    struct Impl;
+   explicit World(std::unique_ptr<Impl> impl);
    std::unique_ptr<Impl> _impl;
 };
 

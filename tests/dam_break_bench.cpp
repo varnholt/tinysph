@@ -1,10 +1,11 @@
 // runs the dam break scene headless and prints density and timing statistics.
-// usage: tinysph_bench [speed_of_sound] [viscosity] [seconds] [artificial_viscosity]
+// usage: tinysph_bench [--gpu] [speed_of_sound] [viscosity] [seconds] [artificial_viscosity]
 
 #include <algorithm>
 #include <chrono>
 #include <print>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "test_scenes.h"
@@ -14,6 +15,13 @@ using namespace std::chrono_literals;
 
 int main(int argument_count, char** arguments)
 {
+   if (argument_count > 1 && std::string_view{arguments[1]} == "--gpu")
+   {
+      test::backend() = tinysph::Backend::Gpu;
+      --argument_count;
+      ++arguments;
+   }
+
    tinysph::FluidParameters parameters;
    if (argument_count > 1)
    {
@@ -32,7 +40,8 @@ int main(int argument_count, char** arguments)
    auto world = test::makeDamBreakWorld(parameters);
    const auto rest_density = world.settings()._rest_density;
    std::println(
-      "particles {}, c {}, mu {}, alpha {}",
+      "{}: particles {}, c {}, mu {}, alpha {}",
+      world.deviceDescription(),
       world.particleCount(),
       parameters._speed_of_sound,
       parameters._viscosity,

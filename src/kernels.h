@@ -87,6 +87,32 @@ public:
       return 2.0f * distance > _support_radius ? _cohesion_factor * product : _cohesion_factor * (2.0f * product - _cohesion_offset);
    }
 
+   // the raw factors, for the gpu shaders that evaluate the same kernels
+   [[nodiscard]] float poly6Factor() const
+   {
+      return _poly6_factor;
+   }
+
+   [[nodiscard]] float spikyGradientFactor() const
+   {
+      return _spiky_gradient_factor;
+   }
+
+   [[nodiscard]] float viscosityLaplacianFactor() const
+   {
+      return _viscosity_laplacian_factor;
+   }
+
+   [[nodiscard]] float cohesionFactor() const
+   {
+      return _cohesion_factor;
+   }
+
+   [[nodiscard]] float cohesionOffset() const
+   {
+      return _cohesion_offset;
+   }
+
 private:
    float _support_radius{0.0f};              //!< h
    float _support_radius_squared{0.0f};      //!< h^2

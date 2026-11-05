@@ -30,6 +30,20 @@ jobs:
           - name: macOS AppleClang
             os: macos-15
             configure: ""
+          # the gpu backend on software or virtual gpus: lavapipe (mesa vulkan), warp (d3d12) and the runner's metal device.
+          # require_gpu fails the tests instead of skipping the gpu backend when no adapter is found
+          - name: Linux GCC 14, GPU (lavapipe)
+            os: ubuntu-24.04
+            configure: -DCMAKE_CXX_COMPILER=g++-14 -DTINYSPH_GPU=ON
+            require_gpu: "1"
+          - name: Windows MSVC, GPU (WARP)
+            os: windows-latest
+            configure: -DTINYSPH_GPU=ON
+            require_gpu: "1"
+          - name: macOS AppleClang, GPU (Metal)
+            os: macos-15
+            configure: -DTINYSPH_GPU=ON
+            require_gpu: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +51,10 @@ jobs:
       - name: Install TBB (parallel algorithms for libstdc++)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libtbb-dev
+
+      - name: Install lavapipe (software vulkan)
+        if: runner.os == 'Linux' && contains(matrix.configure, 'TINYSPH_GPU=ON')
+        run: sudo apt-get install -y mesa-vulkan-drivers
 
       # clang 18 cannot use libstdc++'s std::expected (needs __cpp_concepts 202002), clang 19+ can
       - name: Install Clang 20
@@ -52,7 +70,9 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        env:
+          TINYSPH_REQUIRE_GPU: ${{ matrix.require_gpu }}
+        run: ctest --test-dir build -C Release --output-on-failure --verbose
 
       - name: Example
         shell: bash
@@ -86,6 +106,8 @@ jobs:
           EOF
           cmake -S consumer -B consumer/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/install" ${{ matrix.configure }}
           cmake --build consumer/build --config Release
+          # with the gpu backend the consumer also loads the bundled wgpu-native, which windows looks for on the PATH
+          export PATH="$PWD/install/bin:$PATH"
           if [ -f consumer/build/Release/consumer.exe ]; then consumer/build/Release/consumer.exe; else consumer/build/consumer; fi
 
   sandbox:
@@ -95,7 +117,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake -S . -B build -DTINYSPH_BUILD_TESTS=OFF -DTINYSPH_BUILD_EXAMPLES=OFF
+        run: cmake -S . -B build -DTINYSPH_BUILD_TESTS=OFF -DTINYSPH_BUILD_EXAMPLES=OFF -DTINYSPH_GPU=ON
 
       - name: Build
         run: cmake --build build --config Release --parallel --target tinysph_sandbox

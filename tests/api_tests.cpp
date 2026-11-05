@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <numeric>
 #include <print>
@@ -62,6 +63,7 @@ TEST_CASE("invalid settings are reported, not crashed on")
       {._domain = {{0.0f, 0.0f, 0.0f}, {100.0f, 100.0f, 100.0f}}, ._particle_spacing = 0.001f}, tinysph::SettingsError::TooManyGridCells
    );
    check_rejected({._max_particles = 0}, tinysph::SettingsError::ZeroParticleCap);
+   check_rejected({._backend = static_cast<tinysph::Backend>(42)}, tinysph::SettingsError::UnsupportedBackend);
 
    auto threw = false;
    try
@@ -77,7 +79,7 @@ TEST_CASE("invalid settings are reported, not crashed on")
 
 TEST_CASE("step takes any std::chrono duration")
 {
-   tinysph::World world{{}, {._gravity = {}}};
+   tinysph::World world{test::onBackend({}), {._gravity = {}}};
    world.addFluid(tinysph::Sphere{{0.5f, 0.5f, 0.5f}, 0.1f});
 
    // the substeps add up in float, so compare with a tolerance
@@ -94,7 +96,7 @@ TEST_CASE("step takes any std::chrono duration")
 
 TEST_CASE("handles are unique, stale handles are rejected")
 {
-   tinysph::World world;
+   tinysph::World world{test::onBackend({})};
    const auto first = world.addCollider(tinysph::Sphere{{0.5f, 0.5f, 0.5f}, 0.1f});
    const auto second = world.addCollider(tinysph::Box{{0.2f, 0.2f, 0.2f}, {0.05f, 0.05f, 0.05f}});
    CHECK(first != second);
@@ -127,7 +129,7 @@ TEST_CASE("handles are unique, stale handles are rejected")
 
 TEST_CASE("addFluid fills shapes, but not colliders or space outside the domain")
 {
-   tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}}};
+   tinysph::World world{test::onBackend({._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}})};
    const auto spacing = world.settings()._particle_spacing;
 
    const auto box_count = world.addFluid(tinysph::Box{{0.5f, 0.5f, 0.5f}, {0.1f, 0.1f, 0.1f}});
@@ -146,7 +148,7 @@ TEST_CASE("addFluid fills shapes, but not colliders or space outside the domain"
 
 TEST_CASE("particles follow a shrinking domain")
 {
-   tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}}};
+   tinysph::World world{test::onBackend({._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}})};
    world.addFluid(tinysph::Box{{0.5f, 0.2f, 0.5f}, {0.45f, 0.15f, 0.45f}});
    world.setDomain({{0.0f, 0.0f, 0.0f}, {0.6f, 1.0f, 1.0f}});
    world.step(frame_time);
@@ -239,7 +241,7 @@ TEST_CASE("dam break comes to rest")
 
 TEST_CASE("emitter spawns whole layers at the expected rate")
 {
-   tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 1.0f}}}, {._gravity = {}}};
+   tinysph::World world{test::onBackend({._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 1.0f}}}), {._gravity = {}}};
    const auto spacing = world.settings()._particle_spacing;
    const auto speed = 2.0f;
    world.addEmitter({._position = {0.5f, 0.1f, 0.5f}, ._velocity = {0.0f, speed, 0.0f}, ._radius = 0.04f});
@@ -264,7 +266,7 @@ TEST_CASE("emitter spawns whole layers at the expected rate")
 TEST_CASE("surface tension merges colliding drops")
 {
    // without it the drops burst into spray: after 1 s about half of the particles are isolated
-   tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.6f, 1.0f, 1.0f}}}, {._gravity = {}, ._surface_tension = 1.0f}};
+   tinysph::World world{test::onBackend({._domain = {{0.0f, 0.0f, 0.0f}, {1.6f, 1.0f, 1.0f}}}), {._gravity = {}, ._surface_tension = 1.0f}};
    world.addFluid(tinysph::Sphere{{0.45f, 0.5f, 0.5f}, 0.15f}, {1.0f, 0.0f, 0.0f});
    world.addFluid(tinysph::Sphere{{1.15f, 0.55f, 0.5f}, 0.15f}, {-1.0f, 0.0f, 0.0f});
    for (auto frame = 0; frame < 60; ++frame)
@@ -292,7 +294,7 @@ TEST_CASE("surface tension merges colliding drops")
 
 TEST_CASE("an attractor pulls fluid towards it")
 {
-   tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}}, {._gravity = {}}};
+   tinysph::World world{test::onBackend({._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}}), {._gravity = {}}};
    world.addFluid(tinysph::Sphere{{0.3f, 0.5f, 0.5f}, 0.1f});
    world.addForceField(tinysph::Attractor{{0.7f, 0.5f, 0.5f}, 30.0f, 0.6f});
    world.step(200ms);
@@ -305,7 +307,162 @@ TEST_CASE("an attractor pulls fluid towards it")
    CHECK_MESSAGE(center_x > 0.35f, "fluid center moved to x = {:.3f}", center_x);
 }
 
+// ----------------------------------------------------------------------------------------------------
+// gpu only: the same scene on both backends
+// ----------------------------------------------------------------------------------------------------
+
+namespace
+{
+
+/// rief dam break plus a box collider and every kind of force field, so each gpu code path runs.
+tinysph::World makeMixedScene(tinysph::Backend backend)
+{
+   tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.6f, 1.0f, 0.6f}}, ._backend = backend}};
+   world.addCollider(tinysph::Sphere{{1.1f, 0.12f, 0.3f}, 0.12f});
+   world.addCollider(tinysph::Box{{0.75f, 0.06f, 0.3f}, {0.04f, 0.06f, 0.2f}});
+   world.addForceField(tinysph::Vortex{{0.3f, 0.3f, 0.3f}, {0.0f, 1.0f, 0.0f}, 5.0f, 0.2f});
+   world.addForceField(tinysph::Wind{{{0.0f, 0.4f, 0.0f}, {0.5f, 1.0f, 0.6f}}, {2.0f, 0.0f, 0.0f}});
+   world.addForceField(tinysph::Attractor{{1.3f, 0.3f, 0.3f}, 5.0f, 0.3f});
+   world.addFluid(tinysph::Box{{0.26f, 0.31f, 0.3f}, {0.24f, 0.29f, 0.28f}});
+   return world;
+}
+
+tinysph::Vec3 centerOfMass(const tinysph::World& world)
+{
+   const auto positions = world.positions();
+   return std::accumulate(positions.begin(), positions.end(), tinysph::Vec3{}) / static_cast<float>(positions.size());
+}
+
+}  // namespace
+
+TEST_CASE("gpu: one substep matches the cpu")
+{
+   if (test::backend() != tinysph::Backend::Gpu)
+   {
+      return;
+   }
+   auto cpu = makeMixedScene(tinysph::Backend::Cpu);
+   auto gpu = makeMixedScene(tinysph::Backend::Gpu);
+   CHECK(cpu.particleCount() == gpu.particleCount());
+
+   // one short substep from identical particles; the order differs, so compare the sorted densities
+   cpu.step(1ms);
+   gpu.step(1ms);
+   std::vector<float> cpu_densities(cpu.densities().begin(), cpu.densities().end());
+   std::vector<float> gpu_densities(gpu.densities().begin(), gpu.densities().end());
+   std::ranges::sort(cpu_densities);
+   std::ranges::sort(gpu_densities);
+   auto max_difference = 0.0f;
+   for (const auto& [cpu_density, gpu_density] : std::views::zip(cpu_densities, gpu_densities))
+   {
+      max_difference = std::max(max_difference, std::abs(cpu_density - gpu_density) / cpu_density);
+   }
+   const auto offset = tinysph::length(centerOfMass(cpu) - centerOfMass(gpu));
+   std::println(
+      "   {} particles, densities differ by up to {:.2e}, centers of mass {:.2e} m apart", cpu.particleCount(), max_difference, offset
+   );
+   CHECK_MESSAGE(max_difference < 1e-4f, "densities differ by up to {:.2e}", max_difference);
+   CHECK_MESSAGE(offset < 1e-5f, "centers of mass {:.2e} m apart", offset);
+}
+
+TEST_CASE("gpu: half a second of flow matches the cpu")
+{
+   if (test::backend() != tinysph::Backend::Gpu)
+   {
+      return;
+   }
+   auto cpu = makeMixedScene(tinysph::Backend::Cpu);
+   auto gpu = makeMixedScene(tinysph::Backend::Gpu);
+
+   // float round-off grows chaotically in a splash, so only the bulk motion can be compared after many substeps
+   tinysph::StepStatistics cpu_statistics;
+   tinysph::StepStatistics gpu_statistics;
+   for (auto frame = 0; frame < 30; ++frame)
+   {
+      cpu_statistics = cpu.step(frame_time);
+      gpu_statistics = gpu.step(frame_time);
+   }
+   const auto offset = tinysph::length(centerOfMass(cpu) - centerOfMass(gpu));
+   CHECK_MESSAGE(offset < 0.005f, "centers of mass {:.4f} m apart", offset);
+
+   const auto cpu_speed = meanSpeed(cpu);
+   const auto gpu_speed = meanSpeed(gpu);
+   CHECK_MESSAGE(std::abs(cpu_speed - gpu_speed) < 0.03f * cpu_speed, "mean speed cpu {:.3f}, gpu {:.3f} m/s", cpu_speed, gpu_speed);
+
+   const auto density_difference = std::abs(cpu_statistics._average_density_ratio - gpu_statistics._average_density_ratio);
+   CHECK_MESSAGE(density_difference < 0.005f, "average density ratio differs by {:.4f}", density_difference);
+   std::println(
+      "   centers of mass {:.4f} m apart, mean speed cpu {:.3f} gpu {:.3f} m/s, density ratio cpu {:.4f} gpu {:.4f}; last frame cpu "
+      "{:.1f} ms, gpu {:.1f} ms",
+      offset,
+      cpu_speed,
+      gpu_speed,
+      cpu_statistics._average_density_ratio,
+      gpu_statistics._average_density_ratio,
+      cpu_statistics._wall_time.count(),
+      gpu_statistics._wall_time.count()
+   );
+}
+
+TEST_CASE("gpu: emitters outgrow the gpu buffers")
+{
+   if (test::backend() != tinysph::Backend::Gpu)
+   {
+      return;
+   }
+   const auto run = [](tinysph::Backend backend)
+   {
+      tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 1.0f}}, ._backend = backend}, {._gravity = {}}};
+      world.addEmitter({._position = {0.5f, 0.1f, 0.5f}, ._velocity = {0.0f, 3.0f, 0.0f}, ._radius = 0.2f});
+      for (auto frame = 0; frame < 20; ++frame)
+      {
+         world.step(frame_time);
+      }
+      return world;
+   };
+   const auto cpu = run(tinysph::Backend::Cpu);
+   const auto gpu = run(tinysph::Backend::Gpu);
+   CHECK_MESSAGE(cpu.particleCount() == gpu.particleCount(), "cpu {} particles, gpu {}", cpu.particleCount(), gpu.particleCount());
+   CHECK_MESSAGE(gpu.particleCount() > 4096, "only {} particles, the buffers never grew", gpu.particleCount());
+
+   const auto& domain = gpu.domain();
+   const auto broken = std::ranges::count_if(
+      gpu.positions(), [&](const tinysph::Vec3& position) { return !isFinite(position) || !domain.contains(position); }
+   );
+   CHECK_MESSAGE(broken == 0, "{} particles are nan or outside", broken);
+
+   const auto offset = tinysph::length(centerOfMass(cpu) - centerOfMass(gpu));
+   std::println("   {} particles emitted, centers of mass {:.2e} m apart", gpu.particleCount(), offset);
+   CHECK_MESSAGE(offset < 0.005f, "centers of mass {:.4f} m apart", offset);
+}
+
 int main()
 {
-   return test::runAll();
+   // every test runs on each backend that is built in and finds a device; ci sets TINYSPH_REQUIRE_GPU to fail
+   // instead of skipping when the gpu backend cannot run
+   std::vector backends{tinysph::Backend::Cpu};
+   const auto gpu_world = tinysph::World::create({._backend = tinysph::Backend::Gpu});
+   if (gpu_world)
+   {
+      std::println("gpu backend on {}", gpu_world->deviceDescription());
+      backends.push_back(tinysph::Backend::Gpu);
+   }
+   else
+   {
+      std::println("gpu backend skipped: {}", tinysph::describe(gpu_world.error()));
+      if (std::getenv("TINYSPH_REQUIRE_GPU") != nullptr)
+      {
+         std::println("TINYSPH_REQUIRE_GPU is set, failing");
+         return 1;
+      }
+   }
+
+   auto exit_code = 0;
+   for (const auto backend : backends)
+   {
+      std::println("===== {} backend =====", backend == tinysph::Backend::Gpu ? "gpu" : "cpu");
+      test::backend() = backend;
+      exit_code = test::runAll();
+   }
+   return exit_code;
 }

@@ -85,11 +85,11 @@ Everything public lives in `include/tinysph/`:
 
 Design rules that keep it stable:
 
-- `World` hides its implementation behind a pointer, so the solver, its data layout and future backends (GPU) can change without breaking your code.
+- `World` hides its implementation behind a pointer, so the solver, its data layout and the backend (CPU or GPU) can change without breaking your code.
 - Colliders, force fields and emitters are referred to by typed handles (`ColliderId`, ...). A handle never points to a different object after removal; ids are not reused.
 - `WorldSettings` is fixed per world (resolution, rest density, backend); `FluidParameters` can be changed at any time.
 - Time is a `std::chrono` duration, so `step(16)` (seconds or milliseconds?) does not compile; `step(16ms)` does.
-- Invalid settings are reported through `std::expected` by `World::create()`; the constructor throws `std::invalid_argument` (or terminates without exceptions).
+- Invalid settings are reported through `std::expected` by `World::create()`; the constructor throws `std::invalid_argument` (or terminates without exceptions). A GPU world that finds no usable GPU fails with `SettingsError::GpuUnavailable`, or `std::runtime_error` from the constructor.
 - Semantic versioning. Until 1.0 the API may still change between minor versions; from 1.0 on, only with a new major version.
 
 ## Build
@@ -107,7 +107,7 @@ Tests and benchmark:
 
 ```
 ctest --test-dir build -C Release --output-on-failure
-build\tests\Release\tinysph_bench.exe [speed_of_sound] [viscosity] [seconds] [artificial_viscosity]
+build\tests\Release\tinysph_bench.exe [--gpu] [speed_of_sound] [viscosity] [seconds] [artificial_viscosity]
 ```
 
 | Option | Default | |
@@ -116,6 +116,36 @@ build\tests\Release\tinysph_bench.exe [speed_of_sound] [viscosity] [seconds] [ar
 | `TINYSPH_BUILD_TESTS` | top level only | `tinysph_api_tests`, `tinysph_internal_tests`, `tinysph_bench` |
 | `TINYSPH_BUILD_EXAMPLES` | top level only | `hello_fluid` |
 | `TINYSPH_INSTALL` | top level only | install rules and the CMake package |
+| `TINYSPH_GPU` | `OFF` | GPU backend; downloads a prebuilt [wgpu-native](https://github.com/gfx-rs/wgpu-native) at configure time |
+
+## GPU backend
+
+Build with `-DTINYSPH_GPU=ON` and ask for the backend in the settings:
+
+```cpp
+auto world = tinysph::World::create({._backend = tinysph::Backend::Gpu});
+if (!world)
+{
+   // SettingsError::UnsupportedBackend: built without TINYSPH_GPU
+   // SettingsError::GpuUnavailable: no usable GPU on this machine
+}
+std::println("running on {}", world->deviceDescription());
+```
+
+Everything else stays the same: the API, the results (within float round-off, the tests compare both backends) and
+the particle data you read back. The solver passes run as WebGPU compute shaders through wgpu-native, so the same
+code runs on Vulkan, Metal and Direct3D 12. On machines without a GPU it falls back to a software adapter (WARP,
+lavapipe). wgpu-native is a shared library: it ships next to your program, and `cmake --install` installs it with
+tinysph.
+
+The 2 s dam break benchmark (9614 particles) takes 0.85 s on a laptop RTX PRO 4000, against 5.1 s on the CPU backend
+(Core Ultra 9 285HX, 24 threads).
+
+For now `World::step()` uploads the particles, runs all substeps on the GPU and reads them back at the end, so
+`positions()` works as before. Between substeps only the maximum speed and acceleration come back, for the
+adaptive time step.
+
+In the sandbox, tick "gpu" in the simulation panel or start it with `--gpu`.
 
 ## Sandbox controls
 
@@ -134,6 +164,7 @@ build\tests\Release\tinysph_bench.exe [speed_of_sound] [viscosity] [seconds] [ar
 |------|----------|
 | `include/tinysph/` | public API |
 | `src/` | implementation (`tinysph::detail`), not installed |
+| `src/gpu/` | GPU backend: WGSL compute shaders and the wgpu-native host code |
 | `sandbox/` | the interactive sandbox: SDL3 window, OpenGL 3.3 / GLSL ES 3.00 renderer, Dear ImGui panels |
 | `examples/` | small programs using the library |
 | `tests/` | API tests, internal tests, headless dam break benchmark |
@@ -150,8 +181,9 @@ Weakly compressible SPH (WCSPH) with the Mueller et al. 2003 kernels:
 - semi-implicit Euler with an adaptive time step (CFL and force condition)
 - colliders as signed distance functions, the domain as six planes
 
-The particle data is stored as separate arrays per attribute and the grid is a counting sort, so the
-same passes can move to GPU compute shaders.
+The GPU backend runs the same passes as compute shaders (`src/gpu/shaders.h`). The counting sort becomes an atomic
+count per cell, a prefix sum and a scatter. The particle order inside a cell then depends on the order of the
+atomics, which is the only difference to the CPU.
 
 ## Background
 
