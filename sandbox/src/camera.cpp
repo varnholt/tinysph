@@ -5,13 +5,13 @@
 
 namespace
 {
-constexpr sph::Vec3 world_up{0.0f, 1.0f, 0.0f};
+constexpr tinysph::Vec3 world_up{0.0f, 1.0f, 0.0f};
 }
 
-void OrbitCamera::frame(const sph::Aabb& box)
+void OrbitCamera::frame(const tinysph::Aabb& box)
 {
    _target = box.center();
-   const auto radius = sph::length(box.size()) * 0.5f;
+   const auto radius = tinysph::length(box.size()) * 0.5f;
    _distance = radius / std::sin(_field_of_view_y * 0.5f) * 0.9f;
 }
 
@@ -23,8 +23,8 @@ void OrbitCamera::orbit(float delta_yaw, float delta_pitch)
 
 void OrbitCamera::pan(float delta_x, float delta_y)
 {
-   const auto right = sph::normalize(sph::cross(forward(), world_up));
-   const auto up = sph::cross(right, forward());
+   const auto right = tinysph::normalize(tinysph::cross(forward(), world_up));
+   const auto up = tinysph::cross(right, forward());
    const auto scale = _distance * 0.0015f;
    _target += (right * -delta_x + up * delta_y) * scale;
 }
@@ -34,18 +34,18 @@ void OrbitCamera::zoom(float wheel_steps)
    _distance = std::clamp(_distance * std::pow(0.9f, wheel_steps), 0.1f, 50.0f);
 }
 
-sph::Vec3 OrbitCamera::eye() const
+tinysph::Vec3 OrbitCamera::eye() const
 {
-   const sph::Vec3 offset{std::cos(_pitch) * std::sin(_yaw), std::sin(_pitch), std::cos(_pitch) * std::cos(_yaw)};
+   const tinysph::Vec3 offset{std::cos(_pitch) * std::sin(_yaw), std::sin(_pitch), std::cos(_pitch) * std::cos(_yaw)};
    return _target + offset * _distance;
 }
 
-sph::Vec3 OrbitCamera::forward() const
+tinysph::Vec3 OrbitCamera::forward() const
 {
-   return sph::normalize(_target - eye());
+   return tinysph::normalize(_target - eye());
 }
 
-sph::Vec3 OrbitCamera::target() const
+tinysph::Vec3 OrbitCamera::target() const
 {
    return _target;
 }
@@ -68,8 +68,8 @@ Mat4 OrbitCamera::projectionMatrix(float aspect_ratio) const
 Ray OrbitCamera::rayThroughPoint(float x, float y, float window_width, float window_height) const
 {
    const auto view_forward = forward();
-   const auto right = sph::normalize(sph::cross(view_forward, world_up));
-   const auto up = sph::cross(right, view_forward);
+   const auto right = tinysph::normalize(tinysph::cross(view_forward, world_up));
+   const auto up = tinysph::cross(right, view_forward);
 
    const auto half_height = std::tan(_field_of_view_y * 0.5f);
    const auto half_width = half_height * window_width / window_height;
@@ -77,5 +77,5 @@ Ray OrbitCamera::rayThroughPoint(float x, float y, float window_width, float win
    const auto normalized_y = 1.0f - (y / window_height) * 2.0f;
 
    const auto direction = view_forward + right * (normalized_x * half_width) + up * (normalized_y * half_height);
-   return {eye(), sph::normalize(direction)};
+   return {eye(), tinysph::normalize(direction)};
 }

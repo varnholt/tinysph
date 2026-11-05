@@ -6,8 +6,8 @@
 #include <vector>
 
 #include "camera.h"
-#include "sph/scene.h"
-#include "sph/solver.h"
+#include "sandbox_scene.h"
+#include "tinysph/tinysph.h"
 
 enum class RenderMode : int32_t
 {
@@ -52,12 +52,13 @@ public:
    void shutdown();
 
    void render(
-      const sph::Solver& solver,
+      const tinysph::World& world,
+      const SandboxScene& scene,
       const OrbitCamera& camera,
       int32_t framebuffer_width,
       int32_t framebuffer_height,
       const RenderSettings& settings,
-      const std::optional<sph::Attractor>& mouse_tool
+      const std::optional<tinysph::Attractor>& mouse_tool
    );
 
 private:
@@ -71,18 +72,24 @@ private:
    void resizeTargets(int32_t width, int32_t height);
    void destroyTargets();
 
-   void uploadParticles(const sph::Solver& solver, const RenderSettings& settings);
-   void buildMeshes(const sph::Solver& solver, const RenderSettings& settings);
-   void buildHelperLines(const sph::Solver& solver, const std::optional<sph::Attractor>& mouse_tool);
+   void uploadParticles(const tinysph::World& world, const RenderSettings& settings);
+   void buildMeshes(const SandboxScene& scene, const RenderSettings& settings);
+   void buildHelperLines(const SandboxScene& scene, const std::optional<tinysph::Attractor>& mouse_tool);
 
-   void addTriangle(const sph::Vec3& a, const sph::Vec3& b, const sph::Vec3& c, const sph::Vec3& normal, const sph::Vec3& color);
-   void addSolidBox(const sph::Vec3& center, const sph::Vec3& half_extents, const sph::Vec3& color);
-   void addSolidSphere(const sph::Vec3& center, float radius, const sph::Vec3& color);
+   void addTriangle(
+      const tinysph::Vec3& a,
+      const tinysph::Vec3& b,
+      const tinysph::Vec3& c,
+      const tinysph::Vec3& normal,
+      const tinysph::Vec3& color
+   );
+   void addSolidBox(const tinysph::Vec3& center, const tinysph::Vec3& half_extents, const tinysph::Vec3& color);
+   void addSolidSphere(const tinysph::Vec3& center, float radius, const tinysph::Vec3& color);
 
-   void addLine(const sph::Vec3& from, const sph::Vec3& to, const sph::Vec3& color);
-   void addBox(const sph::Aabb& box, const sph::Vec3& color);
-   void addCircle(const sph::Vec3& center, const sph::Vec3& normal, float radius, const sph::Vec3& color);
-   void addSphere(const sph::Vec3& center, float radius, const sph::Vec3& color);
+   void addLine(const tinysph::Vec3& from, const tinysph::Vec3& to, const tinysph::Vec3& color);
+   void addBox(const tinysph::Aabb& box, const tinysph::Vec3& color);
+   void addCircle(const tinysph::Vec3& center, const tinysph::Vec3& normal, float radius, const tinysph::Vec3& color);
+   void addSphere(const tinysph::Vec3& center, float radius, const tinysph::Vec3& color);
 
    // programs
    uint32_t _sky_program{0};

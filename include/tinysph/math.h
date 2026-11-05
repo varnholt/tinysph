@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace sph
+namespace tinysph
 {
 
 /// \brief minimal 3d vector used by the solver; plain floats so it maps 1:1 to gpu buffers later.
@@ -133,4 +133,4 @@ struct Aabb
    }
 };
 
-}  // namespace sph
+}  // namespace tinysph

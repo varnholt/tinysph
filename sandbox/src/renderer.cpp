@@ -134,7 +134,7 @@ void setUniform(uint32_t program, const char* name, float value)
    gl::Uniform1f(gl::GetUniformLocation(program, name), value);
 }
 
-void setUniform(uint32_t program, const char* name, const sph::Vec3& value)
+void setUniform(uint32_t program, const char* name, const tinysph::Vec3& value)
 {
    gl::Uniform3f(gl::GetUniformLocation(program, name), value.x, value.y, value.z);
 }
@@ -284,12 +284,13 @@ void Renderer::resizeTargets(int32_t width, int32_t height)
 }
 
 void Renderer::render(
-   const sph::Solver& solver,
+   const tinysph::World& world,
+   const SandboxScene& scene,
    const OrbitCamera& camera,
    int32_t framebuffer_width,
    int32_t framebuffer_height,
    const RenderSettings& settings,
-   const std::optional<sph::Attractor>& mouse_tool
+   const std::optional<tinysph::Attractor>& mouse_tool
 )
 {
    if (framebuffer_width <= 0 || framebuffer_height <= 0)
@@ -309,7 +310,7 @@ void Renderer::render(
    const auto projection = camera.projectionMatrix(aspect_ratio);
    const auto view_projection = projection * view;
    const auto tan_half_fov = std::tan(camera.fieldOfViewY() * 0.5f);
-   const auto particle_radius = solver.settings()._particle_spacing * 0.5f;
+   const auto particle_radius = world.particleRadius();
 
    // the view matrix rotation maps world to view; its transpose maps view to world
    std::array<float, 9> view_to_world{};
@@ -320,15 +321,15 @@ void Renderer::render(
          view_to_world[static_cast<std::size_t>(column * 3 + row)] = view.at(row, column);
       }
    }
-   const sph::Vec3 sun_world{0.3904f, 0.7807f, 0.4880f};
-   const sph::Vec3 light_view{
+   const tinysph::Vec3 sun_world{0.3904f, 0.7807f, 0.4880f};
+   const tinysph::Vec3 light_view{
       view.at(0, 0) * sun_world.x + view.at(1, 0) * sun_world.y + view.at(2, 0) * sun_world.z,
       view.at(0, 1) * sun_world.x + view.at(1, 1) * sun_world.y + view.at(2, 1) * sun_world.z,
       view.at(0, 2) * sun_world.x + view.at(1, 2) * sun_world.y + view.at(2, 2) * sun_world.z,
    };
 
-   uploadParticles(solver, settings);
-   buildMeshes(solver, settings);
+   uploadParticles(world, settings);
+   buildMeshes(scene, settings);
    const auto particle_count = static_cast<GLsizei>(_particle_data.size() / 4);
 
    const auto draw_fullscreen = [this]()
@@ -476,7 +477,7 @@ void Renderer::render(
    // 6) helper lines on top, depth tested against everything above
    if (settings._show_helpers)
    {
-      buildHelperLines(solver, mouse_tool);
+      buildHelperLines(scene, mouse_tool);
       gl::BindBuffer(GL_ARRAY_BUFFER, _line_buffer);
       gl::BufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(_line_data.size() * sizeof(float)), _line_data.data(), GL_STREAM_DRAW);
       gl::UseProgram(_line_program);
@@ -490,12 +491,12 @@ void Renderer::render(
    glDisable(GL_DEPTH_TEST);
 }
 
-void Renderer::uploadParticles(const sph::Solver& solver, const RenderSettings& settings)
+void Renderer::uploadParticles(const tinysph::World& world, const RenderSettings& settings)
 {
-   const auto positions = solver.positions();
-   const auto velocities = solver.velocities();
-   const auto densities = solver.densities();
-   const auto rest_density = solver.settings()._rest_density;
+   const auto positions = world.positions();
+   const auto velocities = world.velocities();
+   const auto densities = world.densities();
+   const auto rest_density = world.settings()._rest_density;
 
    _particle_data.resize(positions.size() * 4);
    for (std::size_t particle_index = 0; particle_index < positions.size(); ++particle_index)
@@ -504,7 +505,7 @@ void Renderer::uploadParticles(const sph::Solver& solver, const RenderSettings& 
       switch (settings._color_mode)
       {
          case ColorMode::Speed:
-            color_value = sph::length(velocities[particle_index]) / settings._speed_range;
+            color_value = tinysph::length(velocities[particle_index]) / settings._speed_range;
             break;
          case ColorMode::Density:
             // 0.9 rho0 -> 0, 1.1 rho0 -> 1
@@ -526,41 +527,46 @@ void Renderer::uploadParticles(const sph::Solver& solver, const RenderSettings& 
    gl::BufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(_particle_data.size() * sizeof(float)), _particle_data.data(), GL_STREAM_DRAW);
 }
 
-void Renderer::buildMeshes(const sph::Solver& solver, const RenderSettings& settings)
+void Renderer::buildMeshes(const SandboxScene& scene, const RenderSettings& settings)
 {
-   const auto& scene = solver.scene();
    _mesh_data.clear();
 
    if (settings._show_floor)
    {
-      const auto& container = scene._container;
+      const auto& container = scene._domain;
       constexpr auto margin = 2.0f;
       const auto height = container._min.y - 0.002f;
-      const sph::Vec3 corner_a{container._min.x - margin, height, container._min.z - margin};
-      const sph::Vec3 corner_b{container._max.x + margin, height, container._min.z - margin};
-      const sph::Vec3 corner_c{container._max.x + margin, height, container._max.z + margin};
-      const sph::Vec3 corner_d{container._min.x - margin, height, container._max.z + margin};
-      const sph::Vec3 up{0.0f, 1.0f, 0.0f};
-      const sph::Vec3 floor_color{0.74f, 0.72f, 0.68f};
+      const tinysph::Vec3 corner_a{container._min.x - margin, height, container._min.z - margin};
+      const tinysph::Vec3 corner_b{container._max.x + margin, height, container._min.z - margin};
+      const tinysph::Vec3 corner_c{container._max.x + margin, height, container._max.z + margin};
+      const tinysph::Vec3 corner_d{container._min.x - margin, height, container._max.z + margin};
+      const tinysph::Vec3 up{0.0f, 1.0f, 0.0f};
+      const tinysph::Vec3 floor_color{0.74f, 0.72f, 0.68f};
       addTriangle(corner_a, corner_c, corner_b, up, floor_color);
       addTriangle(corner_a, corner_d, corner_c, up, floor_color);
    }
    _floor_vertex_count = static_cast<int32_t>(_mesh_data.size() / 9);
 
-   const sph::Vec3 collider_color{0.86f, 0.52f, 0.26f};
+   const tinysph::Vec3 collider_color{0.86f, 0.52f, 0.26f};
    for (const auto& collider : scene._colliders)
    {
       std::visit(
          Overloaded{
-            [&](const sph::SphereCollider& sphere) { addSolidSphere(sphere._center, sphere._radius, collider_color); },
-            [&](const sph::BoxCollider& box) { addSolidBox(box._center, box._half_extents, collider_color); },
+            [&](const tinysph::Sphere& sphere) { addSolidSphere(sphere._center, sphere._radius, collider_color); },
+            [&](const tinysph::Box& box) { addSolidBox(box._center, box._half_extents, collider_color); },
          },
-         collider
+         collider._shape
       );
    }
 }
 
-void Renderer::addTriangle(const sph::Vec3& a, const sph::Vec3& b, const sph::Vec3& c, const sph::Vec3& normal, const sph::Vec3& color)
+void Renderer::addTriangle(
+   const tinysph::Vec3& a,
+   const tinysph::Vec3& b,
+   const tinysph::Vec3& c,
+   const tinysph::Vec3& normal,
+   const tinysph::Vec3& color
+)
 {
    for (const auto* vertex : {&a, &b, &c})
    {
@@ -568,16 +574,16 @@ void Renderer::addTriangle(const sph::Vec3& a, const sph::Vec3& b, const sph::Ve
    }
 }
 
-void Renderer::addSolidBox(const sph::Vec3& center, const sph::Vec3& half_extents, const sph::Vec3& color)
+void Renderer::addSolidBox(const tinysph::Vec3& center, const tinysph::Vec3& half_extents, const tinysph::Vec3& color)
 {
    // one face per axis and sign: normal n, two tangents spanning the face
-   const std::array<std::array<sph::Vec3, 3>, 3> axes{{
+   const std::array<std::array<tinysph::Vec3, 3>, 3> axes{{
       {{{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}},
       {{{0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}}},
       {{{0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}}},
    }};
-   const auto scale = [&](const sph::Vec3& direction)
-   { return sph::Vec3{direction.x * half_extents.x, direction.y * half_extents.y, direction.z * half_extents.z}; };
+   const auto scale = [&](const tinysph::Vec3& direction)
+   { return tinysph::Vec3{direction.x * half_extents.x, direction.y * half_extents.y, direction.z * half_extents.z}; };
 
    for (const auto& axis : axes)
    {
@@ -597,7 +603,7 @@ void Renderer::addSolidBox(const sph::Vec3& center, const sph::Vec3& half_extent
    }
 }
 
-void Renderer::addSolidSphere(const sph::Vec3& center, float radius, const sph::Vec3& color)
+void Renderer::addSolidSphere(const tinysph::Vec3& center, float radius, const tinysph::Vec3& color)
 {
    constexpr auto stacks = 16;
    constexpr auto slices = 32;
@@ -607,7 +613,7 @@ void Renderer::addSolidSphere(const sph::Vec3& center, float radius, const sph::
    {
       const auto polar = pi * static_cast<float>(stack) / stacks;
       const auto azimuth = 2.0f * pi * static_cast<float>(slice) / slices;
-      return sph::Vec3{std::sin(polar) * std::cos(azimuth), std::cos(polar), std::sin(polar) * std::sin(azimuth)};
+      return tinysph::Vec3{std::sin(polar) * std::cos(azimuth), std::cos(polar), std::sin(polar) * std::sin(azimuth)};
    };
 
    for (auto stack = 0; stack < stacks; ++stack)
@@ -632,36 +638,37 @@ void Renderer::addSolidSphere(const sph::Vec3& center, float radius, const sph::
    }
 }
 
-void Renderer::buildHelperLines(const sph::Solver& solver, const std::optional<sph::Attractor>& mouse_tool)
+void Renderer::buildHelperLines(const SandboxScene& scene, const std::optional<tinysph::Attractor>& mouse_tool)
 {
-   const sph::Vec3 container_color{0.85f, 0.85f, 0.9f};
-   const sph::Vec3 emitter_color{0.3f, 0.95f, 0.4f};
-   const sph::Vec3 field_color{0.85f, 0.35f, 0.9f};
-   const sph::Vec3 tool_color{1.0f, 1.0f, 0.3f};
+   const tinysph::Vec3 container_color{0.85f, 0.85f, 0.9f};
+   const tinysph::Vec3 emitter_color{0.3f, 0.95f, 0.4f};
+   const tinysph::Vec3 field_color{0.85f, 0.35f, 0.9f};
+   const tinysph::Vec3 tool_color{1.0f, 1.0f, 0.3f};
 
    _line_data.clear();
-   const auto& scene = solver.scene();
-   addBox(scene._container, container_color);
+   addBox(scene._domain, container_color);
 
-   for (const auto& emitter : scene._emitters)
+   for (const auto& scene_emitter : scene._emitters)
    {
-      const auto direction = sph::normalize(emitter._velocity);
+      const auto& emitter = scene_emitter._emitter;
+      const auto direction = tinysph::normalize(emitter._velocity);
       addCircle(emitter._position, direction, emitter._radius, emitter_color);
       addLine(emitter._position, emitter._position + direction * 0.1f, emitter_color);
    }
 
-   for (const auto& field : scene._fields)
+   for (const auto& scene_field : scene._fields)
    {
+      const auto& field = scene_field._field;
       std::visit(
          Overloaded{
-            [&](const sph::Attractor& attractor) { addSphere(attractor._position, attractor._radius, field_color); },
-            [&](const sph::Vortex& vortex)
+            [&](const tinysph::Attractor& attractor) { addSphere(attractor._position, attractor._radius, field_color); },
+            [&](const tinysph::Vortex& vortex)
             {
-               const auto axis = sph::normalize(vortex._axis);
+               const auto axis = tinysph::normalize(vortex._axis);
                addCircle(vortex._position, axis, vortex._radius, field_color);
                addLine(vortex._position - axis * vortex._radius, vortex._position + axis * vortex._radius, field_color);
             },
-            [&](const sph::Wind& wind) { addBox(wind._region, field_color); },
+            [&](const tinysph::Wind& wind) { addBox(wind._region, field_color); },
          },
          field
       );
@@ -673,17 +680,17 @@ void Renderer::buildHelperLines(const sph::Solver& solver, const std::optional<s
    }
 }
 
-void Renderer::addLine(const sph::Vec3& from, const sph::Vec3& to, const sph::Vec3& color)
+void Renderer::addLine(const tinysph::Vec3& from, const tinysph::Vec3& to, const tinysph::Vec3& color)
 {
    _line_data.insert(_line_data.end(), {from.x, from.y, from.z, color.x, color.y, color.z});
    _line_data.insert(_line_data.end(), {to.x, to.y, to.z, color.x, color.y, color.z});
 }
 
-void Renderer::addBox(const sph::Aabb& box, const sph::Vec3& color)
+void Renderer::addBox(const tinysph::Aabb& box, const tinysph::Vec3& color)
 {
    const auto& low = box._min;
    const auto& high = box._max;
-   const std::array<sph::Vec3, 8> corners{{
+   const std::array<tinysph::Vec3, 8> corners{{
       {low.x, low.y, low.z},
       {high.x, low.y, low.z},
       {high.x, high.y, low.z},
@@ -713,12 +720,12 @@ void Renderer::addBox(const sph::Aabb& box, const sph::Vec3& color)
    }
 }
 
-void Renderer::addCircle(const sph::Vec3& center, const sph::Vec3& normal, float radius, const sph::Vec3& color)
+void Renderer::addCircle(const tinysph::Vec3& center, const tinysph::Vec3& normal, float radius, const tinysph::Vec3& color)
 {
-   const auto unit_normal = sph::normalize(normal);
-   const auto helper = std::abs(unit_normal.y) < 0.9f ? sph::Vec3{0.0f, 1.0f, 0.0f} : sph::Vec3{1.0f, 0.0f, 0.0f};
-   const auto tangent = sph::normalize(sph::cross(unit_normal, helper));
-   const auto bitangent = sph::cross(unit_normal, tangent);
+   const auto unit_normal = tinysph::normalize(normal);
+   const auto helper = std::abs(unit_normal.y) < 0.9f ? tinysph::Vec3{0.0f, 1.0f, 0.0f} : tinysph::Vec3{1.0f, 0.0f, 0.0f};
+   const auto tangent = tinysph::normalize(tinysph::cross(unit_normal, helper));
+   const auto bitangent = tinysph::cross(unit_normal, tangent);
 
    constexpr auto segment_count = 32;
    for (auto segment = 0; segment < segment_count; ++segment)
@@ -733,7 +740,7 @@ void Renderer::addCircle(const sph::Vec3& center, const sph::Vec3& normal, float
    }
 }
 
-void Renderer::addSphere(const sph::Vec3& center, float radius, const sph::Vec3& color)
+void Renderer::addSphere(const tinysph::Vec3& center, float radius, const tinysph::Vec3& color)
 {
    addCircle(center, {1.0f, 0.0f, 0.0f}, radius, color);
    addCircle(center, {0.0f, 1.0f, 0.0f}, radius, color);

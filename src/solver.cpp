@@ -1,4 +1,4 @@
-#include "sph/solver.h"
+#include "solver.h"
 
 #include <algorithm>
 #include <chrono>
@@ -7,19 +7,14 @@
 #include <ranges>
 #include <utility>
 
-#include "sph/parallel.h"
+#include "geometry.h"
+#include "parallel.h"
 
-namespace sph
+namespace tinysph::detail
 {
 
 namespace
 {
-
-template <class... Callables>
-struct Overloaded : Callables...
-{
-   using Callables::operator()...;
-};
 
 /// \brief sum of w_poly6 over a cubic lattice around one particle (self included).
 ///        dividing rho0 by this gives a mass for which a resting lattice has exactly the rest density.
@@ -50,39 +45,45 @@ float nextJitter(uint32_t& state)
    return static_cast<float>(state) / static_cast<float>(UINT32_MAX) - 0.5f;
 }
 
-}  // namespace
-
-Solver::Solver(const SolverSettings& settings) : _settings(settings)
+float maxLength(std::span<const Vec3> values)
 {
-   applySettings();
+   const auto max_length_squared =
+      std::ranges::fold_left(values | std::views::transform(lengthSquared), 0.0f, [](float lhs, float rhs) { return std::max(lhs, rhs); });
+   return std::sqrt(max_length_squared);
 }
 
-void Solver::applySettings()
+}  // namespace
+
+Solver::Solver(const WorldSettings& settings, const FluidParameters& parameters) : _settings(settings), _parameters(parameters)
 {
    const auto spacing = _settings._particle_spacing;
    _kernels.setSupportRadius(spacing * _settings._support_radius_factor);
    _particle_mass = _settings._rest_density / latticeKernelSum(_kernels, spacing);
    _particle_radius = spacing * 0.5f;
-   setupGrid();
+   setDomain(_settings._domain);
 }
 
-void Solver::loadScene(const Scene& scene)
+const WorldSettings& Solver::settings() const
 {
-   _scene = scene;
-   _jitter_state = 1u;
-   applySettings();
-   clearParticles();
+   return _settings;
+}
 
-   for (const auto& fluid : _scene._fluids)
-   {
-      std::visit(
-         Overloaded{
-            [&](const FluidBox& box) { addFluidBox(box._box, box._velocity); },
-            [&](const FluidSphere& sphere) { addFluidSphere(sphere._center, sphere._radius, sphere._velocity); },
-         },
-         fluid
-      );
-   }
+const FluidParameters& Solver::parameters() const
+{
+   return _parameters;
+}
+
+void Solver::setParameters(const FluidParameters& parameters)
+{
+   _parameters = parameters;
+}
+
+void Solver::setDomain(const Aabb& domain)
+{
+   // keep the domain at least a few particles wide so the grid stays valid
+   const auto minimum_extent = _settings._particle_spacing * 4.0f;
+   _settings._domain = {domain._min, componentMax(domain._max, domain._min + Vec3{minimum_extent, minimum_extent, minimum_extent})};
+   setupGrid();
 }
 
 void Solver::clearParticles()
@@ -98,14 +99,24 @@ void Solver::clearParticles()
 std::size_t Solver::addFluidBox(const Aabb& box, const Vec3& velocity)
 {
    const auto spacing = _settings._particle_spacing;
+
+   // whole particles that fit per axis; integer counts so float round off never drops or adds a row
+   const auto count_along = [&](float extent) { return std::max(0, static_cast<int32_t>(std::floor(extent / spacing + 1e-3f))); };
+   const auto size = box.size();
+   const auto count_x = count_along(size.x);
+   const auto count_y = count_along(size.y);
+   const auto count_z = count_along(size.z);
+   const auto first = box._min + Vec3{_particle_radius, _particle_radius, _particle_radius};
+
    std::size_t added_count = 0;
-   for (auto z = box._min.z + _particle_radius; z <= box._max.z - _particle_radius; z += spacing)
+   for (auto z = 0; z < count_z; ++z)
    {
-      for (auto y = box._min.y + _particle_radius; y <= box._max.y - _particle_radius; y += spacing)
+      for (auto y = 0; y < count_y; ++y)
       {
-         for (auto x = box._min.x + _particle_radius; x <= box._max.x - _particle_radius; x += spacing)
+         for (auto x = 0; x < count_x; ++x)
          {
-            if (addParticle({x, y, z}, velocity))
+            const auto offset = Vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)} * spacing;
+            if (addParticle(first + offset, velocity))
             {
                ++added_count;
             }
@@ -144,16 +155,15 @@ bool Solver::addParticle(const Vec3& position, const Vec3& velocity)
       return false;
    }
 
-   const auto& container = _scene._container;
+   const auto& domain = _settings._domain;
    const Vec3 margin{_particle_radius, _particle_radius, _particle_radius};
-   if (!Aabb{container._min + margin, container._max - margin}.contains(position))
+   if (!Aabb{domain._min + margin, domain._max - margin}.contains(position))
    {
       return false;
    }
 
-   const auto inside_collider = std::ranges::any_of(
-      _scene._colliders, [&](const Collider& collider) { return signedDistance(collider, position) < _particle_radius; }
-   );
+   const auto inside_collider =
+      std::ranges::any_of(_colliders, [&](const Shape& collider) { return signedDistance(collider, position) < _particle_radius; });
    if (inside_collider)
    {
       return false;
@@ -168,6 +178,21 @@ bool Solver::addParticle(const Vec3& position, const Vec3& velocity)
    _densities.push_back(_settings._rest_density);
    _pressures.push_back(0.0f);
    return true;
+}
+
+std::vector<Shape>& Solver::colliders()
+{
+   return _colliders;
+}
+
+std::vector<ForceField>& Solver::fields()
+{
+   return _fields;
+}
+
+std::vector<EmitterState>& Solver::emitters()
+{
+   return _emitters;
 }
 
 StepStatistics Solver::advance(float frame_time, int32_t max_substeps)
@@ -215,10 +240,10 @@ void Solver::step(float time_step)
 float Solver::computeTimeStep() const
 {
    const auto support_radius = _kernels.supportRadius();
-   auto time_step = _settings._max_time_step;
+   auto time_step = _parameters._max_time_step;
 
    // cfl condition: no information may travel further than a fraction of h per step
-   time_step = std::min(time_step, _settings._cfl_number * support_radius / (_settings._speed_of_sound + maxSpeed()));
+   time_step = std::min(time_step, _parameters._cfl_number * support_radius / (_parameters._speed_of_sound + maxSpeed()));
 
    // force condition: a particle starting at rest may not move further than a fraction of h per step
    if (_max_acceleration > 0.0f)
@@ -232,11 +257,11 @@ float Solver::computeTimeStep() const
 void Solver::setupGrid()
 {
    const auto cell_size = _kernels.supportRadius();
-   const auto& container = _scene._container;
+   const auto& domain = _settings._domain;
 
    // one cell of padding on each side so particles touching the walls still have all 27 cells
-   _grid_origin = container._min - Vec3{cell_size, cell_size, cell_size};
-   const auto extent = container.size() + Vec3{cell_size, cell_size, cell_size} * 2.0f;
+   _grid_origin = domain._min - Vec3{cell_size, cell_size, cell_size};
+   const auto extent = domain.size() + Vec3{cell_size, cell_size, cell_size} * 2.0f;
    _grid_size = {
       std::max(1, static_cast<int32_t>(std::ceil(extent.x / cell_size))),
       std::max(1, static_cast<int32_t>(std::ceil(extent.y / cell_size))),
@@ -311,8 +336,8 @@ void Solver::computeDensities()
 {
    const auto mass = _particle_mass;
    const auto rest_density = _settings._rest_density;
-   const auto stiffness = _settings._speed_of_sound * _settings._speed_of_sound;
-   const auto clamp_negative_pressure = _settings._clamp_negative_pressure;
+   const auto stiffness = _parameters._speed_of_sound * _parameters._speed_of_sound;
+   const auto clamp_negative_pressure = _parameters._clamp_negative_pressure;
 
    parallelFor(
       _positions.size(),
@@ -338,10 +363,10 @@ void Solver::computeDensities()
 void Solver::computeAccelerations()
 {
    const auto mass = _particle_mass;
-   const auto viscosity = _settings._viscosity;
-   const auto gravity = _scene._gravity;
+   const auto viscosity = _parameters._viscosity;
+   const auto gravity = _parameters._gravity;
    const auto support_radius = _kernels.supportRadius();
-   const auto artificial_viscosity_factor = _settings._artificial_viscosity * _settings._speed_of_sound * support_radius;
+   const auto artificial_viscosity_factor = _parameters._artificial_viscosity * _parameters._speed_of_sound * support_radius;
    const auto singularity_guard = 0.01f * support_radius * support_radius;
 
    parallelFor(
@@ -386,11 +411,7 @@ void Solver::computeAccelerations()
 
          auto acceleration = pressure_acceleration + viscosity_acceleration * viscosity + gravity;
          const auto& position = _positions[particle_index];
-         for (const auto& field : _scene._fields)
-         {
-            acceleration += fieldAcceleration(field, position);
-         }
-         for (const auto& field : _transient_fields)
+         for (const auto& field : _fields)
          {
             acceleration += fieldAcceleration(field, position);
          }
@@ -398,10 +419,7 @@ void Solver::computeAccelerations()
       }
    );
 
-   const auto max_acceleration_squared = std::ranges::fold_left(
-      _accelerations | std::views::transform(lengthSquared), 0.0f, [](float lhs, float rhs) { return std::max(lhs, rhs); }
-   );
-   _max_acceleration = std::sqrt(max_acceleration_squared);
+   _max_acceleration = maxLength(_accelerations);
 }
 
 void Solver::integrate(float time_step)
@@ -423,8 +441,8 @@ void Solver::integrate(float time_step)
 
 void Solver::resolveCollisions(Vec3& position, Vec3& velocity) const
 {
-   const auto restitution = _settings._wall_restitution;
-   const auto friction = _settings._wall_friction;
+   const auto restitution = _parameters._wall_restitution;
+   const auto friction = _parameters._wall_friction;
 
    // push the particle out along the normal and remove the velocity component that points into the surface
    const auto apply_contact = [&](const Vec3& normal, float penetration)
@@ -438,7 +456,7 @@ void Solver::resolveCollisions(Vec3& position, Vec3& velocity) const
       }
    };
 
-   for (const auto& collider : _scene._colliders)
+   for (const auto& collider : _colliders)
    {
       const auto distance = signedDistance(collider, position) - _particle_radius;
       if (distance < 0.0f)
@@ -447,10 +465,10 @@ void Solver::resolveCollisions(Vec3& position, Vec3& velocity) const
       }
    }
 
-   // the container comes last so it always wins
+   // the domain comes last so it always wins
    const Vec3 margin{_particle_radius, _particle_radius, _particle_radius};
-   const auto lower = _scene._container._min + margin;
-   const auto upper = _scene._container._max - margin;
+   const auto lower = _settings._domain._min + margin;
+   const auto upper = _settings._domain._max - margin;
 
    if (position.x < lower.x)
    {
@@ -481,25 +499,26 @@ void Solver::resolveCollisions(Vec3& position, Vec3& velocity) const
 void Solver::runEmitters(float time_step)
 {
    const auto spacing = _settings._particle_spacing;
-   for (auto& emitter : _scene._emitters)
+   for (auto& state : _emitters)
    {
-      const auto speed = length(emitter._velocity);
-      if (!emitter._enabled || speed <= 0.0f)
+      const auto speed = length(state._emitter._velocity);
+      if (!state._emitter._enabled || speed <= 0.0f)
       {
          continue;
       }
 
-      emitter._travelled += speed * time_step;
-      while (emitter._travelled >= spacing)
+      state._travelled += speed * time_step;
+      while (state._travelled >= spacing)
       {
-         emitter._travelled -= spacing;
-         emitLayer(emitter);
+         state._travelled -= spacing;
+         emitLayer(state);
       }
    }
 }
 
-void Solver::emitLayer(const Emitter& emitter)
+void Solver::emitLayer(const EmitterState& state)
 {
+   const auto& emitter = state._emitter;
    const auto spacing = _settings._particle_spacing;
    const auto direction = normalize(emitter._velocity);
 
@@ -509,7 +528,7 @@ void Solver::emitLayer(const Emitter& emitter)
    const auto bitangent = cross(direction, tangent);
 
    // the layer has already moved by the leftover distance since it was due
-   const auto origin = emitter._position + direction * emitter._travelled;
+   const auto origin = emitter._position + direction * state._travelled;
    const auto steps = static_cast<int32_t>(std::floor(emitter._radius / spacing));
    for (auto row = -steps; row <= steps; ++row)
    {
@@ -524,31 +543,6 @@ void Solver::emitLayer(const Emitter& emitter)
    }
 }
 
-Scene& Solver::scene()
-{
-   return _scene;
-}
-
-const Scene& Solver::scene() const
-{
-   return _scene;
-}
-
-SolverSettings& Solver::settings()
-{
-   return _settings;
-}
-
-const SolverSettings& Solver::settings() const
-{
-   return _settings;
-}
-
-void Solver::setTransientFields(std::vector<ForceField> fields)
-{
-   _transient_fields = std::move(fields);
-}
-
 std::size_t Solver::particleCount() const
 {
    return _positions.size();
@@ -557,6 +551,11 @@ std::size_t Solver::particleCount() const
 float Solver::particleMass() const
 {
    return _particle_mass;
+}
+
+float Solver::particleRadius() const
+{
+   return _particle_radius;
 }
 
 float Solver::supportRadius() const
@@ -586,10 +585,7 @@ Vec3 Solver::totalMomentum() const
 
 float Solver::maxSpeed() const
 {
-   const auto max_speed_squared = std::ranges::fold_left(
-      _velocities | std::views::transform(lengthSquared), 0.0f, [](float lhs, float rhs) { return std::max(lhs, rhs); }
-   );
-   return std::sqrt(max_speed_squared);
+   return maxLength(_velocities);
 }
 
-}  // namespace sph
+}  // namespace tinysph::detail

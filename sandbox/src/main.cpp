@@ -11,23 +11,23 @@
 #include "gl_functions.h"
 #include "renderer.h"
 #include "sandbox_ui.h"
-#include "sph/solver.h"
+#include "tinysph/tinysph.h"
 
 namespace
 {
 
 /// \brief intersects the mouse ray with the plane through the camera target that faces the camera.
-std::optional<sph::Vec3>
+std::optional<tinysph::Vec3>
 mouseOnTargetPlane(const OrbitCamera& camera, float mouse_x, float mouse_y, float window_width, float window_height)
 {
    const auto ray = camera.rayThroughPoint(mouse_x, mouse_y, window_width, window_height);
    const auto plane_normal = camera.forward();
-   const auto denominator = sph::dot(ray._direction, plane_normal);
+   const auto denominator = tinysph::dot(ray._direction, plane_normal);
    if (std::abs(denominator) < 1e-6f)
    {
       return std::nullopt;
    }
-   const auto distance = sph::dot(camera.target() - ray._origin, plane_normal) / denominator;
+   const auto distance = tinysph::dot(camera.target() - ray._origin, plane_normal) / denominator;
    if (distance <= 0.0f)
    {
       return std::nullopt;
@@ -56,8 +56,9 @@ int main(int, char**)
 
    const auto display_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
    const auto window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-   auto* window =
-      SDL_CreateWindow("SPH Sandbox", static_cast<int32_t>(1600 * display_scale), static_cast<int32_t>(900 * display_scale), window_flags);
+   auto* window = SDL_CreateWindow(
+      "tinysph sandbox", static_cast<int32_t>(1600 * display_scale), static_cast<int32_t>(900 * display_scale), window_flags
+   );
    if (window == nullptr)
    {
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_CreateWindow failed: %s", SDL_GetError());
@@ -96,11 +97,15 @@ int main(int, char**)
    }
 
    SandboxState state;
-   sph::Solver solver;
-   solver.loadScene(makePresetScene(state._preset_index));
+   loadPreset(state, state._preset_index);
+   state._rebuild_requested = false;
+   auto world = buildWorld(state._scene, state._particle_spacing, state._parameters);
 
    OrbitCamera camera;
-   camera.frame(solver.scene()._container);
+   camera.frame(state._scene._domain);
+
+   // the mouse tool is an ordinary force field that exists while the button is held
+   std::optional<tinysph::ForceFieldId> mouse_field_id;
 
    auto running = true;
    auto previous_frame = std::chrono::steady_clock::now();
@@ -130,7 +135,7 @@ int main(int, char**)
                   }
                   else if (event.key.key == SDLK_R)
                   {
-                     state._reset_requested = true;
+                     state._rebuild_requested = true;
                   }
                }
                break;
@@ -158,19 +163,21 @@ int main(int, char**)
          }
       }
 
-      if (state._reset_requested)
+      if (state._rebuild_requested)
       {
-         state._reset_requested = false;
-         solver.loadScene(sph::Scene{solver.scene()});
+         state._rebuild_requested = false;
+         world = buildWorld(state._scene, state._particle_spacing, state._parameters);
+         mouse_field_id.reset();
       }
       if (state._reframe_requested)
       {
          state._reframe_requested = false;
-         camera.frame(solver.scene()._container);
+         camera.frame(state._scene._domain);
       }
+      world.setParameters(state._parameters);
 
       // mouse tool: an attractor that follows the cursor while the left button is held
-      std::optional<sph::Attractor> mouse_attractor;
+      std::optional<tinysph::Attractor> mouse_attractor;
       auto mouse_x = 0.0f;
       auto mouse_y = 0.0f;
       const auto mouse_buttons = SDL_GetMouseState(&mouse_x, &mouse_y);
@@ -184,28 +191,41 @@ int main(int, char**)
          if (point.has_value())
          {
             const auto sign = state._mouse_tool._mode == MouseToolMode::Pull ? 1.0f : -1.0f;
-            mouse_attractor = sph::Attractor{*point, state._mouse_tool._strength * sign, state._mouse_tool._radius};
+            mouse_attractor = tinysph::Attractor{*point, state._mouse_tool._strength * sign, state._mouse_tool._radius};
          }
       }
-      solver.setTransientFields(
-         mouse_attractor.has_value() ? std::vector<sph::ForceField>{*mouse_attractor} : std::vector<sph::ForceField>{}
-      );
+      if (mouse_attractor.has_value())
+      {
+         if (mouse_field_id.has_value())
+         {
+            world.setForceField(*mouse_field_id, *mouse_attractor);
+         }
+         else
+         {
+            mouse_field_id = world.addForceField(*mouse_attractor);
+         }
+      }
+      else if (mouse_field_id.has_value())
+      {
+         world.removeForceField(*mouse_field_id);
+         mouse_field_id.reset();
+      }
 
       if (state._running)
       {
-         state._statistics = solver.advance(1.0f / 60.0f * state._time_scale, state._max_substeps);
+         state._statistics = world.step(1.0f / 60.0f * state._time_scale, state._max_substeps);
       }
 
       ImGui_ImplOpenGL3_NewFrame();
       ImGui_ImplSDL3_NewFrame();
       ImGui::NewFrame();
-      drawSandboxUi(solver, state);
+      drawSandboxUi(world, state);
       ImGui::Render();
 
       auto framebuffer_width = 0;
       auto framebuffer_height = 0;
       SDL_GetWindowSizeInPixels(window, &framebuffer_width, &framebuffer_height);
-      renderer.render(solver, camera, framebuffer_width, framebuffer_height, state._render_settings, mouse_attractor);
+      renderer.render(world, state._scene, camera, framebuffer_width, framebuffer_height, state._render_settings, mouse_attractor);
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
       SDL_GL_SwapWindow(window);
 

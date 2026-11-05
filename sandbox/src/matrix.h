@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstdint>
 
-#include "sph/vec3.h"
+#include "tinysph/math.h"
 
 /// \brief column major 4x4 matrix, laid out the way opengl expects it.
 struct Mat4
@@ -48,11 +48,11 @@ struct Mat4
       return result;
    }
 
-   [[nodiscard]] static Mat4 lookAt(const sph::Vec3& eye, const sph::Vec3& target, const sph::Vec3& up)
+   [[nodiscard]] static Mat4 lookAt(const tinysph::Vec3& eye, const tinysph::Vec3& target, const tinysph::Vec3& up)
    {
-      const auto forward = sph::normalize(target - eye);
-      const auto right = sph::normalize(sph::cross(forward, up));
-      const auto camera_up = sph::cross(right, forward);
+      const auto forward = tinysph::normalize(target - eye);
+      const auto right = tinysph::normalize(tinysph::cross(forward, up));
+      const auto camera_up = tinysph::cross(right, forward);
 
       auto result = identity();
       result.at(0, 0) = right.x;
@@ -64,9 +64,9 @@ struct Mat4
       result.at(0, 2) = -forward.x;
       result.at(1, 2) = -forward.y;
       result.at(2, 2) = -forward.z;
-      result.at(3, 0) = -sph::dot(right, eye);
-      result.at(3, 1) = -sph::dot(camera_up, eye);
-      result.at(3, 2) = sph::dot(forward, eye);
+      result.at(3, 0) = -tinysph::dot(right, eye);
+      result.at(3, 1) = -tinysph::dot(camera_up, eye);
+      result.at(3, 2) = tinysph::dot(forward, eye);
       return result;
    }
 
