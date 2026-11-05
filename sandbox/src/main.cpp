@@ -1,12 +1,17 @@
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <format>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <ranges>
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -94,6 +99,20 @@ struct App
    OrbitCamera _camera;
    std::optional<tinysph::ForceFieldId> _mouse_field_id;  //!< the mouse tool is a force field that exists while the button is held
    std::chrono::steady_clock::time_point _previous_frame{std::chrono::steady_clock::now()};
+
+   // --capture: every frame is written to _capture_directory without the ui, the app quits after _capture_frames
+   std::filesystem::path _capture_directory;
+   int32_t _capture_frames{0};
+   int32_t _captured_frames{0};
+   std::vector<uint8_t> _capture_pixels;
+
+   [[nodiscard]] bool capturing() const
+   {
+      return !_capture_directory.empty();
+   }
+
+   /// \brief writes the current back buffer as a binary ppm, top row first.
+   void captureFrame(int32_t width, int32_t height);
 };
 
 App::~App()
@@ -191,7 +210,8 @@ int main(int argument_count, char** arguments)
 
    auto& state = app->_state;
    // --preset <index> starts with another scene, --spheres with sphere rendering, --zoom <wheel steps> moves the camera in, --tilt
-   // <radians> changes its pitch, --gpu simulates on the gpu
+   // <radians> changes its pitch, --gpu simulates on the gpu, --capture <directory> [--frames <count>] writes the frames
+   // without the ui as ppm images and quits
    const std::span<char*> argument_list{arguments, static_cast<std::size_t>(argument_count)};
    auto zoom_steps = 0.0f;
    auto tilt = 0.0f;  //!< added to the camera pitch in radians, negative looks flatter
@@ -209,6 +229,24 @@ int main(int argument_count, char** arguments)
       {
          tilt = static_cast<float>(std::atof(value));
       }
+      if (std::string_view{argument} == "--capture")
+      {
+         app->_capture_directory = value;
+      }
+      if (std::string_view{argument} == "--frames")
+      {
+         app->_capture_frames = std::max(1, std::atoi(value));
+      }
+   }
+   if (app->capturing())
+   {
+      std::filesystem::create_directories(app->_capture_directory);
+      if (app->_capture_frames == 0)
+      {
+         app->_capture_frames = 180;
+      }
+      // every frame advances exactly one frame time, never slow motion, so the capture is the same on any machine
+      state._max_substeps = 100'000;
    }
    if (std::ranges::contains(
           argument_list | std::views::transform([](const char* argument) { return std::string_view{argument}; }), "--spheres"
@@ -274,6 +312,11 @@ bool App::frame()
       SDL_Event event;
       while (SDL_PollEvent(&event))
       {
+         // a capture only reacts to closing the window, so clicks into it cannot end up in the recording
+         if (capturing() && event.type != SDL_EVENT_QUIT && event.type != SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+         {
+            continue;
+         }
          ImGui_ImplSDL3_ProcessEvent(&event);
          switch (event.type)
          {
@@ -341,7 +384,7 @@ bool App::frame()
       auto mouse_x = 0.0f;
       auto mouse_y = 0.0f;
       const auto mouse_buttons = SDL_GetMouseState(&mouse_x, &mouse_y);
-      if (state._mouse_tool._mode != MouseToolMode::Off && (mouse_buttons & SDL_BUTTON_LMASK) != 0 && !io.WantCaptureMouse)
+      if (!capturing() && state._mouse_tool._mode != MouseToolMode::Off && (mouse_buttons & SDL_BUTTON_LMASK) != 0 && !io.WantCaptureMouse)
       {
          auto window_width = 0;
          auto window_height = 0;
@@ -376,18 +419,29 @@ bool App::frame()
          state._statistics = world.step(frame_time * state._time_scale, state._max_substeps);
       }
 
-      ImGui_ImplOpenGL3_NewFrame();
-      ImGui_ImplSDL3_NewFrame();
-      ImGui::NewFrame();
-      drawSandboxUi(world, state);
-      ImGui::Render();
+      if (!capturing())
+      {
+         ImGui_ImplOpenGL3_NewFrame();
+         ImGui_ImplSDL3_NewFrame();
+         ImGui::NewFrame();
+         drawSandboxUi(world, state);
+         ImGui::Render();
+      }
 
       auto framebuffer_width = 0;
       auto framebuffer_height = 0;
       SDL_GetWindowSizeInPixels(window, &framebuffer_width, &framebuffer_height);
       _renderer.render(world, state._scene, camera, framebuffer_width, framebuffer_height, state._render_settings, mouse_attractor);
       state._mesh_time = _renderer.meshBuildTime();
-      ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+      if (capturing())
+      {
+         captureFrame(framebuffer_width, framebuffer_height);
+         running = running && ++_captured_frames < _capture_frames;
+      }
+      else
+      {
+         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+      }
       SDL_GL_SwapWindow(window);
 
       const auto now = std::chrono::steady_clock::now();
@@ -395,6 +449,26 @@ bool App::frame()
       _previous_frame = now;
    }
    return running;
+}
+
+void App::captureFrame(int32_t width, int32_t height)
+{
+   const auto row_size = static_cast<std::size_t>(width) * 3;
+   _capture_pixels.resize(row_size * static_cast<std::size_t>(height));
+   glPixelStorei(GL_PACK_ALIGNMENT, 1);
+   glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, _capture_pixels.data());
+
+   const auto path = _capture_directory / std::format("frame_{:04}.ppm", _captured_frames);
+   std::ofstream file{path, std::ios::binary};
+   file << std::format("P6\n{} {}\n255\n", width, height);
+   // opengl rows start at the bottom, ppm rows at the top
+   for (auto row = height - 1; row >= 0; --row)
+   {
+      file.write(
+         reinterpret_cast<const char*>(_capture_pixels.data() + row_size * static_cast<std::size_t>(row)),
+         static_cast<std::streamsize>(row_size)
+      );
+   }
 }
 
 }  // namespace

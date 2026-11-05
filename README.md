@@ -6,6 +6,8 @@ A tiny C++23 library for smoothed particle hydrodynamics (SPH): fluid volumes, c
 behind one small API, with no dependencies beyond the standard library. Comes with an interactive sandbox that renders
 the fluid as a surface with reflection and refraction, and lets you poke the water with the mouse.
 
+![dam break, about 9,600 particles on the GPU backend](docs/images/dam_break.gif)
+
 **[Try the sandbox in your browser](https://varnholt.github.io/tinysph/)**: a reduced demo. It runs on one CPU
 thread in WebAssembly, with about 1,400 particles; the native build runs on all cores or the GPU and handles 10x-100x
 more.
@@ -17,7 +19,9 @@ more.
 | ![two drops](docs/images/two_drops.png) | ![fountain](docs/images/fountain.png) |
 | two drops merging in zero gravity (surface tension) | fountain hitting a plate, with a vortex |
 
-The images come straight from the sandbox, e.g. `tinysph_sandbox --preset 3 --zoom 4`.
+The images come straight from the sandbox, e.g. `tinysph_sandbox --preset 3 --zoom 4`. The animation is
+`tinysph_sandbox --gpu --capture <directory> --frames 150`, which writes every frame without the UI and quits, turned
+into a GIF with ffmpeg.
 
 ```cpp
 #include <tinysph/tinysph.h>
