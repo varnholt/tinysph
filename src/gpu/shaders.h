@@ -510,8 +510,16 @@ fn applyContact(position: ptr<function, vec3f>, velocity: ptr<function, vec3f>, 
    let normal_speed = dot(*velocity, normal);
    if (normal_speed < 0.0)
    {
+      // coulomb friction, like Solver::resolveCollisions
       let tangential_velocity = *velocity - normal * normal_speed;
-      *velocity = tangential_velocity * (1.0 - params.wall_friction) - normal * (normal_speed * params.wall_restitution);
+      let tangential_speed = length(tangential_velocity);
+      let normal_speed_change = -normal_speed * (1.0 + params.wall_restitution);
+      var keep = 0.0;
+      if (tangential_speed > 1e-9)
+      {
+         keep = max(0.0, 1.0 - params.wall_friction * normal_speed_change / tangential_speed);
+      }
+      *velocity = tangential_velocity * keep - normal * (normal_speed * params.wall_restitution);
    }
 }
 

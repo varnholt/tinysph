@@ -36,11 +36,14 @@ struct FluidDraft
 struct SandboxState
 {
    SandboxScene _scene;
-   tinysph::FluidParameters _parameters;  //!< pushed to the world every frame
 #if defined(__EMSCRIPTEN__)
+   // artificial viscosity acts like a viscosity of about alpha * c * h, so the coarser spacing below gets a smaller alpha
+   // (0.05 * 0.025 / 0.045) to flow like the desktop default instead of like syrup
+   tinysph::FluidParameters _parameters{._artificial_viscosity = 0.028f};  //!< pushed to the world every frame
    float _particle_spacing{0.045f};  //!< applied when the world is rebuilt; coarser in the browser, which runs on one thread
 #else
-   float _particle_spacing{0.025f};  //!< applied when the world is rebuilt
+   tinysph::FluidParameters _parameters;  //!< pushed to the world every frame
+   float _particle_spacing{0.025f};       //!< applied when the world is rebuilt
 #endif
    tinysph::Backend _backend{tinysph::Backend::Cpu};  //!< applied when the world is rebuilt
 
