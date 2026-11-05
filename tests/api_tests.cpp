@@ -9,6 +9,7 @@
 #include <print>
 #include <ranges>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -450,7 +451,9 @@ int main()
    else
    {
       std::println("gpu backend skipped: {}", tinysph::describe(gpu_world.error()));
-      if (std::getenv("TINYSPH_REQUIRE_GPU") != nullptr)
+      // ci sets the variable on every job, empty where no gpu is expected
+      const auto* const require_gpu = std::getenv("TINYSPH_REQUIRE_GPU");
+      if (require_gpu != nullptr && std::string_view{require_gpu} != "" && std::string_view{require_gpu} != "0")
       {
          std::println("TINYSPH_REQUIRE_GPU is set, failing");
          return 1;
