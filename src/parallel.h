@@ -9,7 +9,7 @@
 #include <execution>
 #endif
 
-namespace sph
+namespace tinysph::detail
 {
 
 /// \brief runs function(index) for every index in [0, count), in parallel where the standard library supports it.
@@ -48,4 +48,4 @@ void parallelFor(std::size_t count, Function&& function)
 #endif
 }
 
-}  // namespace sph
+}  // namespace tinysph::detail

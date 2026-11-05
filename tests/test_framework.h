@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <format>
 #include <functional>
 #include <print>
@@ -44,6 +45,20 @@ inline void check(bool condition, std::string_view expression, const std::string
       ++failureCount();
       std::println("   FAILED {}:{}: {} {}", location.file_name(), location.line(), expression, details);
    }
+}
+
+/// \brief runs all registered tests; returns the process exit code.
+inline int32_t runAll()
+{
+   for (const auto& test_case : registry())
+   {
+      std::println("[ RUN  ] {}", test_case._name);
+      const auto failures_before = failureCount();
+      test_case._body();
+      std::println("[ {} ] {}", failureCount() == failures_before ? " OK " : "FAIL", test_case._name);
+   }
+   std::println("{} failed check(s)", failureCount());
+   return failureCount() == 0 ? 0 : 1;
 }
 
 }  // namespace test

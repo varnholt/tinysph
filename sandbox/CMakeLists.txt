@@ -1,3 +1,5 @@
+enable_language(C)
+
 include(FetchContent)
 
 # ----------------------------------------------------------------------------------------------------
@@ -51,7 +53,7 @@ target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
 find_package(OpenGL REQUIRED)
 
 add_executable(
-    sph_sandbox
+    tinysph_sandbox
     src/camera.cpp
     src/camera.h
     src/gl_functions.cpp
@@ -61,10 +63,12 @@ add_executable(
     src/renderer.cpp
     src/renderer.h
     src/sandbox_ui.cpp
+    src/sandbox_scene.cpp
+    src/sandbox_scene.h
     src/sandbox_ui.h
     src/shader_sources.h)
-target_link_libraries(sph_sandbox PRIVATE sph_core imgui SDL3::SDL3-static OpenGL::GL)
+target_link_libraries(tinysph_sandbox PRIVATE tinysph::tinysph tinysph_warnings imgui SDL3::SDL3-static OpenGL::GL)
 
 if(WIN32)
-    set_target_properties(sph_sandbox PROPERTIES WIN32_EXECUTABLE ON)
+    set_target_properties(tinysph_sandbox PROPERTIES WIN32_EXECUTABLE ON)
 endif()

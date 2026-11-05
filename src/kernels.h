@@ -2,9 +2,9 @@
 
 #include <numbers>
 
-#include "sph/vec3.h"
+#include "tinysph/math.h"
 
-namespace sph
+namespace tinysph::detail
 {
 
 /// \brief smoothing kernels from mueller, charypar, gross: "particle-based fluid simulation for interactive applications" (2003).
@@ -79,4 +79,4 @@ private:
    float _viscosity_laplacian_factor{0.0f};  //!< 45 / (pi h^6)
 };
 
-}  // namespace sph
+}  // namespace tinysph::detail
