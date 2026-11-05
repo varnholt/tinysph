@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <numeric>
 #include <print>
 #include <ranges>
 #include <stdexcept>
@@ -257,6 +258,35 @@ TEST_CASE("emitter spawns whole layers at the expected rate")
    const auto expected_layers = std::floor(speed * total_time.count() / spacing);
    const auto layers = static_cast<float>(world.particleCount()) / static_cast<float>(layer_size);
    CHECK_MESSAGE(std::abs(layers - expected_layers) <= 1.0f, "{} layers emitted, expected {}", layers, expected_layers);
+}
+
+TEST_CASE("surface tension merges colliding drops")
+{
+   // without it the drops burst into spray: after 1 s about half of the particles are isolated
+   tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.6f, 1.0f, 1.0f}}}, {._gravity = {}, ._surface_tension = 1.0f}};
+   world.addFluid(tinysph::Sphere{{0.45f, 0.5f, 0.5f}, 0.15f}, {1.0f, 0.0f, 0.0f});
+   world.addFluid(tinysph::Sphere{{1.15f, 0.55f, 0.5f}, 0.15f}, {-1.0f, 0.0f, 0.0f});
+   for (auto frame = 0; frame < 60; ++frame)
+   {
+      world.step(frame_time);
+   }
+
+   const auto rest_density = world.settings()._rest_density;
+   const auto isolated = std::ranges::count_if(world.densities(), [&](float density) { return density < 0.35f * rest_density; });
+   CHECK_MESSAGE(isolated < 20, "{} of {} particles isolated", isolated, world.particleCount());
+
+   // one merged sphere of both volumes has a mean distance to its center of about 0.14 m
+   const auto positions = world.positions();
+   const auto center = std::accumulate(positions.begin(), positions.end(), tinysph::Vec3{}) / static_cast<float>(positions.size());
+   const auto spread = std::transform_reduce(
+                          positions.begin(),
+                          positions.end(),
+                          0.0f,
+                          std::plus{},
+                          [&](const tinysph::Vec3& position) { return tinysph::length(position - center); }
+                       ) /
+                       static_cast<float>(positions.size());
+   CHECK_MESSAGE(spread < 0.2f, "mean distance to the center {:.3f} m", spread);
 }
 
 TEST_CASE("an attractor pulls fluid towards it")

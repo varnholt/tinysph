@@ -122,6 +122,7 @@ struct FluidParameters
    float _speed_of_sound{30.0f};  //!< stiffness of the equation of state p = c^2 (rho - rho0); higher = less compressible, smaller steps
    float _viscosity{0.2f};        //!< dynamic viscosity mu in Pa s
    float _artificial_viscosity{0.05f};     //!< monaghan alpha; damps approaching particle pairs; at 0 the fluid never settles
+   float _surface_tension{0.0f};           //!< akinci gamma; holds drops together and rounds them, 0 = off
    bool _clamp_negative_pressure{true};    //!< avoids particles clumping at the free surface
    float _wall_restitution{0.0f};          //!< 0 = walls absorb the normal velocity, 1 = perfect bounce
    float _wall_friction{0.02f};            //!< fraction of the tangential velocity removed per contact

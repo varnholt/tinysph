@@ -27,6 +27,8 @@ public:
       _poly6_factor = 315.0f / (64.0f * pi * h9);
       _spiky_gradient_factor = -45.0f / (pi * h6);
       _viscosity_laplacian_factor = 45.0f / (pi * h6);
+      _cohesion_factor = 32.0f / (pi * h9);
+      _cohesion_offset = h6 / 64.0f;
    }
 
    [[nodiscard]] float supportRadius() const
@@ -71,12 +73,28 @@ public:
       return distance >= _support_radius ? 0.0f : _viscosity_laplacian_factor * (_support_radius - distance);
    }
 
+   /// \brief cohesion spline from akinci, ihmsen, akinci, solenthaler, teschner: "versatile surface tension and adhesion
+   ///        for sph fluids" (2013). attracts particles further apart than h/2, repels closer ones, so drops hold together
+   ///        without collapsing.
+   [[nodiscard]] float cohesion(float distance) const
+   {
+      if (distance >= _support_radius || distance <= 0.0f)
+      {
+         return 0.0f;
+      }
+      const auto difference = _support_radius - distance;
+      const auto product = difference * difference * difference * distance * distance * distance;
+      return 2.0f * distance > _support_radius ? _cohesion_factor * product : _cohesion_factor * (2.0f * product - _cohesion_offset);
+   }
+
 private:
    float _support_radius{0.0f};              //!< h
    float _support_radius_squared{0.0f};      //!< h^2
    float _poly6_factor{0.0f};                //!< 315 / (64 pi h^9)
    float _spiky_gradient_factor{0.0f};       //!< -45 / (pi h^6)
    float _viscosity_laplacian_factor{0.0f};  //!< 45 / (pi h^6)
+   float _cohesion_factor{0.0f};             //!< 32 / (pi h^9)
+   float _cohesion_offset{0.0f};             //!< h^6 / 64
 };
 
 }  // namespace tinysph::detail

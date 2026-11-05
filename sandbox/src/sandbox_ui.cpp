@@ -152,6 +152,8 @@ void drawFluidSection(tinysph::World& world, SandboxState& state)
    ImGui::SetItemTooltip("stiffness: higher = less compressible, but smaller time steps");
    ImGui::SliderFloat("viscosity", &parameters._viscosity, 0.0f, 5.0f, "%.3f Pa s", ImGuiSliderFlags_Logarithmic);
    ImGui::SliderFloat("artificial viscosity", &parameters._artificial_viscosity, 0.0f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
+   ImGui::SliderFloat("surface tension", &parameters._surface_tension, 0.0f, 5.0f, "%.2f");
+   ImGui::SetItemTooltip("holds drops together and rounds them; costs about half again the solver time");
    ImGui::SetItemTooltip("monaghan alpha: damps colliding particles only; at 0 the fluid keeps boiling");
    ImGui::Checkbox("clamp negative pressure", &parameters._clamp_negative_pressure);
    ImGui::SetItemTooltip("prevents particles from clumping at the free surface");
@@ -439,6 +441,7 @@ void loadPreset(SandboxState& state, int32_t preset_index)
    state._preset_index = preset_index;
    state._scene = makePresetScene(preset_index);
    state._parameters._gravity = state._scene._gravity;
+   state._parameters._surface_tension = state._scene._surface_tension;
    state._rebuild_requested = true;
 }
 
