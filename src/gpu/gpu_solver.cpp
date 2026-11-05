@@ -320,7 +320,15 @@ public:
 private:
    bool initialize()
    {
-      _instance.reset(wgpuCreateInstance(nullptr));
+      // vulkan, metal and d3d12 only. the opengl backend would make its own wgl/egl context current on the calling
+      // thread, which silently breaks an application that renders with opengl on that thread (like the sandbox)
+      WGPUInstanceExtras extras{};
+      extras.chain.sType = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
+      extras.backends = WGPUInstanceBackend_Primary;
+      extras.flags = WGPUInstanceFlag_Default;
+      WGPUInstanceDescriptor descriptor = WGPU_INSTANCE_DESCRIPTOR_INIT;
+      descriptor.nextInChain = &extras.chain;
+      _instance.reset(wgpuCreateInstance(&descriptor));
       if (!_instance)
       {
          return false;
