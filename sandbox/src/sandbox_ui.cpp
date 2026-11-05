@@ -421,6 +421,11 @@ void drawRenderSection(SandboxState& state)
       ImGui::SliderFloat("refraction", &render_settings._refraction_strength, 0.0f, 0.5f);
       ImGui::ColorEdit3("deep water color", render_settings._fluid_color.data());
       ImGui::DragFloat3("absorption (r g b, 1/m)", render_settings._absorption.data(), 0.05f, 0.0f, 20.0f);
+      ImGui::Checkbox("spray as foam", &render_settings._separate_spray);
+      ImGui::SetItemTooltip("particles with low density are drawn as droplets instead of being pulled into the surface");
+      ImGui::BeginDisabled(!render_settings._separate_spray);
+      ImGui::SliderFloat("spray below", &render_settings._spray_threshold, 0.05f, 0.9f, "%.2f rest density");
+      ImGui::EndDisabled();
    }
 
    ImGui::Checkbox("show helpers", &render_settings._show_helpers);

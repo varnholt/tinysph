@@ -23,6 +23,8 @@ struct Overloaded : Callables...
    using Callables::operator()...;
 };
 
+constexpr std::size_t particle_stride = 5;  //!< floats per particle: position, color value, density ratio
+
 uint32_t compileShader(GLenum shader_type, std::initializer_list<const char*> source_parts)
 {
    std::string source{shaders::header};
@@ -185,7 +187,7 @@ bool Renderer::initialize()
    }
 
    gl::GenVertexArrays(1, &_fullscreen_vertex_array);
-   setupVertexArray(_particle_vertex_array, _particle_buffer, {3, 1});
+   setupVertexArray(_particle_vertex_array, _particle_buffer, {3, 1, 1});
    setupVertexArray(_mesh_vertex_array, _mesh_buffer, {3, 3, 3});
    setupVertexArray(_line_vertex_array, _line_buffer, {3, 3});
    return true;
@@ -330,7 +332,7 @@ void Renderer::render(
 
    uploadParticles(world, settings);
    buildMeshes(scene, settings);
-   const auto particle_count = static_cast<GLsizei>(_particle_data.size() / 4);
+   const auto particle_count = static_cast<GLsizei>(_particle_data.size() / particle_stride);
 
    const auto draw_fullscreen = [this]()
    {
@@ -338,9 +340,18 @@ void Renderer::render(
       glDrawArrays(GL_TRIANGLES, 0, 3);
    };
 
-   const auto set_particle_uniforms = [&](uint32_t program, float radius)
+   enum class ParticleFilter : int32_t
+   {
+      All = 0,
+      Bulk = 1,
+      Spray = 2,
+   };
+
+   const auto set_particle_uniforms = [&](uint32_t program, float radius, ParticleFilter filter = ParticleFilter::All)
    {
       gl::UseProgram(program);
+      gl::Uniform1i(gl::GetUniformLocation(program, "u_particle_filter"), std::to_underlying(filter));
+      setUniform(program, "u_spray_threshold", settings._spray_threshold);
       setUniform(program, "u_view", view);
       setUniform(program, "u_projection", projection);
       setUniform(program, "u_point_scale", projection[1, 1] * static_cast<float>(framebuffer_height));
@@ -394,13 +405,16 @@ void Renderer::render(
    }
    else
    {
+      // sparse particles stay out of the surface passes when they are drawn as spray
+      const auto surface_filter = settings._separate_spray ? ParticleFilter::Bulk : ParticleFilter::All;
+
       // 2b) fluid depth: front most sphere surface, linear eye depth, 0 = empty
       gl::BindFramebuffer(GL_FRAMEBUFFER, _fluid_depth_target._framebuffer);
       glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
       if (particle_count > 0)
       {
-         set_particle_uniforms(_fluid_depth_program, particle_radius);
+         set_particle_uniforms(_fluid_depth_program, particle_radius, surface_filter);
          glDrawArrays(GL_POINTS, 0, particle_count);
       }
 
@@ -414,7 +428,7 @@ void Renderer::render(
       glBlendFunc(GL_ONE, GL_ONE);
       if (particle_count > 0)
       {
-         set_particle_uniforms(_fluid_thickness_program, particle_radius);
+         set_particle_uniforms(_fluid_thickness_program, particle_radius, surface_filter);
          glDrawArrays(GL_POINTS, 0, particle_count);
       }
       glDisable(GL_BLEND);
@@ -472,9 +486,18 @@ void Renderer::render(
 
       glDepthFunc(GL_LESS);
       gl::ActiveTexture(GL_TEXTURE0);
+
+      // 6) spray: sparse particles as small foam droplets, depth tested against the surface
+      if (settings._separate_spray && particle_count > 0)
+      {
+         set_particle_uniforms(_sphere_program, particle_radius * 0.6f, ParticleFilter::Spray);
+         gl::Uniform1i(gl::GetUniformLocation(_sphere_program, "u_color_mode"), 3);
+         setUniform(_sphere_program, "u_light_view", light_view);
+         glDrawArrays(GL_POINTS, 0, particle_count);
+      }
    }
 
-   // 6) helper lines on top, depth tested against everything above
+   // 7) helper lines on top, depth tested against everything above
    if (settings._show_helpers)
    {
       buildHelperLines(scene, mouse_tool);
@@ -498,7 +521,7 @@ void Renderer::uploadParticles(const tinysph::World& world, const RenderSettings
    const auto densities = world.densities();
    const auto rest_density = world.settings()._rest_density;
 
-   _particle_data.resize(positions.size() * 4);
+   _particle_data.resize(positions.size() * particle_stride);
    for (const auto [particle_index, particle] : std::views::enumerate(std::views::zip(positions, velocities, densities)))
    {
       const auto& [position, velocity, density] = particle;
@@ -516,11 +539,12 @@ void Renderer::uploadParticles(const tinysph::World& world, const RenderSettings
             break;
       }
 
-      auto* target = &_particle_data[static_cast<std::size_t>(particle_index) * 4];
+      auto* target = &_particle_data[static_cast<std::size_t>(particle_index) * particle_stride];
       target[0] = position.x;
       target[1] = position.y;
       target[2] = position.z;
       target[3] = color_value;
+      target[4] = density / rest_density;
    }
 
    gl::BindBuffer(GL_ARRAY_BUFFER, _particle_buffer);

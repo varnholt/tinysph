@@ -39,6 +39,8 @@ struct RenderSettings
    float _refraction_strength{0.15f};                       //!< screen space offset per meter of thickness
    std::array<float, 3> _fluid_color{0.03f, 0.22f, 0.38f};  //!< color deep water scatters towards
    std::array<float, 3> _absorption{3.5f, 1.1f, 0.55f};     //!< beer-lambert coefficients per meter, red is absorbed first
+   bool _separate_spray{true};                              //!< draw sparse particles as foam droplets instead of surface
+   float _spray_threshold{0.35f};                           //!< rho / rho0 below which a particle counts as spray
 };
 
 /// \brief draws sky, floor, colliders, the fluid and helper lines.
@@ -118,7 +120,7 @@ private:
    int32_t _target_width{0};
    int32_t _target_height{0};
 
-   std::vector<float> _particle_data;  //!< x, y, z, color value per particle
+   std::vector<float> _particle_data;  //!< x, y, z, color value, density ratio per particle
    std::vector<float> _mesh_data;      //!< x, y, z, nx, ny, nz, r, g, b per vertex
    std::vector<float> _line_data;      //!< x, y, z, r, g, b per vertex
    int32_t _floor_vertex_count{0};     //!< the first vertices in _mesh_data belong to the checkered floor

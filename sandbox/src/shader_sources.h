@@ -20,14 +20,20 @@ inline constexpr const char* header = "#version 330 core\n";
 inline constexpr const char* sky_function = R"(
 const vec3 sun_direction = vec3(0.3904, 0.7807, 0.4880);
 
-vec3 skyColor(vec3 direction)
+// the sky without the sun; reflections use this and add the sun as a specular term, otherwise every noisy
+// normal that happens to point at the tiny sun disk turns into a white sparkle
+vec3 skyGradient(vec3 direction)
 {
    vec3 horizon = vec3(0.62, 0.70, 0.78);
    vec3 zenith = vec3(0.16, 0.32, 0.58);
    vec3 ground = vec3(0.16, 0.15, 0.14);
-   vec3 sky = direction.y > 0.0 ? mix(horizon, zenith, pow(direction.y, 0.5)) : mix(horizon, ground, pow(-direction.y, 0.35));
+   return direction.y > 0.0 ? mix(horizon, zenith, pow(direction.y, 0.5)) : mix(horizon, ground, pow(-direction.y, 0.35));
+}
+
+vec3 skyColor(vec3 direction)
+{
    float sun = pow(max(dot(direction, sun_direction), 0.0), 800.0);
-   return sky + vec3(1.0, 0.95, 0.85) * sun * 6.0;
+   return skyGradient(direction) + vec3(1.0, 0.95, 0.85) * sun * 6.0;
 }
 )";
 
@@ -119,17 +125,31 @@ void main()
 inline constexpr const char* particle_vertex = R"(
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in float in_value;
+layout(location = 2) in float in_density_ratio;
 
 uniform mat4 u_view;
 uniform mat4 u_projection;
 uniform float u_point_scale;
 uniform float u_radius;
+uniform int u_particle_filter;     // 0 = all particles, 1 = bulk fluid only, 2 = spray only
+uniform float u_spray_threshold;   // rho / rho0 below which a particle counts as spray
 
 out float v_value;
 out vec3 v_view_center;
 
 void main()
 {
+   bool is_spray = in_density_ratio < u_spray_threshold;
+   if ((u_particle_filter == 1 && is_spray) || (u_particle_filter == 2 && !is_spray))
+   {
+      // outside the clip volume and zero sized: dropped before rasterization
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      v_value = 0.0;
+      v_view_center = vec3(0.0);
+      return;
+   }
+
    vec4 view_position = u_view * vec4(in_position, 1.0);
    gl_Position = u_projection * view_position;
    gl_PointSize = u_point_scale * u_radius / -view_position.z;
@@ -183,7 +203,9 @@ void main()
    float diffuse = max(dot(normal, u_light_view), 0.0);
    float specular = pow(max(dot(reflect(-u_light_view, normal), vec3(0.0, 0.0, 1.0)), 0.0), 32.0);
 
-   vec3 base_color = u_color_mode == 2 ? vec3(0.15, 0.45, 0.9) : waterRamp(clamp(v_value, 0.0, 1.0));
+   vec3 base_color = u_color_mode == 2   ? vec3(0.15, 0.45, 0.9)
+                     : u_color_mode == 3 ? vec3(0.80, 0.88, 0.94)  // foam
+                                         : waterRamp(clamp(v_value, 0.0, 1.0));
    out_color = vec4(base_color * (0.3 + 0.7 * diffuse) + vec3(specular * 0.35), 1.0);
 }
 )";
@@ -348,13 +370,14 @@ void main()
    // reflection of the sky, weighted by schlick's fresnel term (f0 of water is ~0.02)
    float facing = max(dot(normal, view_direction), 0.0);
    float fresnel = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
-   vec3 reflection = skyColor(normalize(u_view_to_world * reflect(-view_direction, normal)));
+   vec3 reflection = skyGradient(normalize(u_view_to_world * reflect(-view_direction, normal)));
 
    // refraction: look up the scene behind the fluid with an offset that grows with the normal and the thickness,
    // then absorb light along the path (beer-lambert), so shallow water is clear and deep water takes on its color
    vec2 refracted_uv = clamp(v_uv + normal.xy * u_refraction_strength * min(thickness, 0.5), vec2(0.0), vec2(1.0));
    vec3 refracted_scene = texture(u_scene_color, refracted_uv).rgb;
-   vec3 transmittance = exp(-u_absorption * thickness);
+   // the minimum thickness keeps thin sheets and jets visible; physically they would be almost clear
+   vec3 transmittance = exp(-u_absorption * (thickness + 4.0 * u_radius));
    vec3 refraction = refracted_scene * transmittance + u_fluid_color * (1.0 - transmittance);
 
    float specular = pow(max(dot(normal, normalize(u_light_view + view_direction)), 0.0), 400.0);
@@ -362,7 +385,7 @@ void main()
    vec3 color = mix(refraction, reflection, fresnel) + vec3(specular * 1.5);
 
    // soft edges where the fluid is only a single particle thick
-   float coverage = smoothstep(0.0, u_radius * 1.5, thickness);
+   float coverage = smoothstep(0.0, u_radius * 0.75, thickness);
    out_color = vec4(mix(scene_color, color, coverage), 1.0);
 
    vec4 clip_position = u_projection * vec4(position, 1.0);
