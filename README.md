@@ -137,7 +137,7 @@ build\tests\Release\tinysph_bench.exe [speed_of_sound] [viscosity] [seconds] [ar
 | `sandbox/` | the interactive sandbox: SDL3 window, OpenGL 3.3 / GLSL ES 3.00 renderer, Dear ImGui panels |
 | `examples/` | small programs using the library |
 | `tests/` | API tests, internal tests, headless dam break benchmark |
-| `docs/` | notes and the review of the original code |
+| `docs/` | SPH notes and the gallery images |
 
 ## Solver
 
@@ -155,8 +155,7 @@ same passes can move to GPU compute shaders.
 
 ## Background
 
-tinysph started as a port of [smoothed_particle_hydrodynamics](https://github.com/varnholt/smoothed_particle_hydrodynamics)
-(Qt, 2015/2016). The port fixed the solver along the way; see [docs/original-code-review.md](docs/original-code-review.md).
+tinysph started as a rewrite of [smoothed_particle_hydrodynamics](https://github.com/varnholt/smoothed_particle_hydrodynamics) (2015/2016).
 The theory notes from the original project live in [docs/sph-notes.md](docs/sph-notes.md).
 
 ## Code style
@@ -169,16 +168,6 @@ uv sync
 uv run cmake-format -i CMakeLists.txt sandbox/CMakeLists.txt tests/CMakeLists.txt examples/CMakeLists.txt
 ```
 
-## Roadmap
-
-1. ~~Port to CMake + C++23 + Dear ImGui, fix the solver, add tests~~
-2. ~~Library with a stable API and CMake package~~
-3. GPU backend: solver passes as WGSL compute shaders behind the same `World` API, checked against the CPU solver
-4. WebGPU renderer (Dawn / wgpu-native natively, browser WebGPU under Emscripten)
-5. Emscripten build and an online demo
-6. Scene save / load, moving colliders, more shapes (capsule, mesh SDF)
-7. Optional: position based fluids (PBF) as a second solver
-
 ## License
 
-MIT, see [LICENSE](LICENSE). The original Qt project remains under LGPL-3.0; tinysph is a rewrite by the same author and is released under MIT.
+MIT, see [LICENSE](LICENSE).

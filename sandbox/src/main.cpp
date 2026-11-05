@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -50,6 +52,19 @@ int main(int argument_count, char** arguments)
       return 1;
    }
 
+   // declared first, so it is destroyed last: sdl quits after the window and the context are gone
+   struct SdlSession
+   {
+      SdlSession() = default;
+      SdlSession(const SdlSession&) = delete;
+      SdlSession& operator=(const SdlSession&) = delete;
+      ~SdlSession()
+      {
+         SDL_Quit();
+      }
+   };
+   const SdlSession sdl_session;
+
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -61,22 +76,29 @@ int main(int argument_count, char** arguments)
 
    const auto display_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
    const auto window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-   auto* window = SDL_CreateWindow(
-      "tinysph sandbox", static_cast<int32_t>(1600 * display_scale), static_cast<int32_t>(900 * display_scale), window_flags
-   );
+   // sdl objects are owned by unique_ptr, so every early return cleans up
+   const std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{
+      SDL_CreateWindow(
+         "tinysph sandbox", static_cast<int32_t>(1600 * display_scale), static_cast<int32_t>(900 * display_scale), window_flags
+      ),
+      &SDL_DestroyWindow
+   };
    if (window == nullptr)
    {
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_CreateWindow failed: %s", SDL_GetError());
       return 1;
    }
 
-   auto gl_context = SDL_GL_CreateContext(window);
+   const auto destroy_context = [](SDL_GLContext context) { SDL_GL_DestroyContext(context); };
+   const std::unique_ptr<std::remove_pointer_t<SDL_GLContext>, decltype(destroy_context)> gl_context{
+      SDL_GL_CreateContext(window.get()), destroy_context
+   };
    if (gl_context == nullptr)
    {
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_GL_CreateContext failed: %s", SDL_GetError());
       return 1;
    }
-   SDL_GL_MakeCurrent(window, gl_context);
+   SDL_GL_MakeCurrent(window.get(), gl_context.get());
    SDL_GL_SetSwapInterval(1);
 
    if (!gl::load())
@@ -92,7 +114,7 @@ int main(int argument_count, char** arguments)
    auto& style = ImGui::GetStyle();
    style.ScaleAllSizes(display_scale);
    style.FontScaleDpi = display_scale;
-   ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
+   ImGui_ImplSDL3_InitForOpenGL(window.get(), gl_context.get());
    ImGui_ImplOpenGL3_Init("#version 330 core");
 
    Renderer renderer;
@@ -160,7 +182,7 @@ int main(int argument_count, char** arguments)
                running = false;
                break;
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-               if (event.window.windowID == SDL_GetWindowID(window))
+               if (event.window.windowID == SDL_GetWindowID(window.get()))
                {
                   running = false;
                }
@@ -224,7 +246,7 @@ int main(int argument_count, char** arguments)
       {
          auto window_width = 0;
          auto window_height = 0;
-         SDL_GetWindowSize(window, &window_width, &window_height);
+         SDL_GetWindowSize(window.get(), &window_width, &window_height);
          const auto point =
             mouseOnTargetPlane(camera, mouse_x, mouse_y, static_cast<float>(window_width), static_cast<float>(window_height));
          if (point.has_value())
@@ -263,11 +285,11 @@ int main(int argument_count, char** arguments)
 
       auto framebuffer_width = 0;
       auto framebuffer_height = 0;
-      SDL_GetWindowSizeInPixels(window, &framebuffer_width, &framebuffer_height);
+      SDL_GetWindowSizeInPixels(window.get(), &framebuffer_width, &framebuffer_height);
       renderer.render(world, state._scene, camera, framebuffer_width, framebuffer_height, state._render_settings, mouse_attractor);
       state._mesh_time = renderer.meshBuildTime();
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-      SDL_GL_SwapWindow(window);
+      SDL_GL_SwapWindow(window.get());
 
       const auto now = std::chrono::steady_clock::now();
       state._frame_time = std::chrono::duration_cast<tinysph::Milliseconds>(now - previous_frame);
@@ -278,8 +300,5 @@ int main(int argument_count, char** arguments)
    ImGui_ImplOpenGL3_Shutdown();
    ImGui_ImplSDL3_Shutdown();
    ImGui::DestroyContext();
-   SDL_GL_DestroyContext(gl_context);
-   SDL_DestroyWindow(window);
-   SDL_Quit();
    return 0;
 }
