@@ -128,6 +128,12 @@ int main(int argument_count, char** arguments)
    {
       state._render_settings._render_mode = RenderMode::Spheres;
    }
+   if (std::ranges::contains(
+          argument_list | std::views::transform([](const char* argument) { return std::string_view{argument}; }), "--mesh"
+       ))
+   {
+      state._render_settings._render_mode = RenderMode::MeshSurface;
+   }
    loadPreset(state, state._preset_index);
    state._rebuild_requested = false;
    auto world = buildWorld(state._scene, state._particle_spacing, state._parameters);
