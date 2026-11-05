@@ -265,6 +265,7 @@ int main(int argument_count, char** arguments)
       auto framebuffer_height = 0;
       SDL_GetWindowSizeInPixels(window, &framebuffer_width, &framebuffer_height);
       renderer.render(world, state._scene, camera, framebuffer_width, framebuffer_height, state._render_settings, mouse_attractor);
+      state._mesh_time = renderer.meshBuildTime();
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
       SDL_GL_SwapWindow(window);
 

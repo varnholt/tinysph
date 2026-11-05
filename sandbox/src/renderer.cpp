@@ -200,6 +200,11 @@ bool Renderer::initialize()
    return true;
 }
 
+tinysph::Milliseconds Renderer::meshBuildTime() const
+{
+   return _mesh_build_time;
+}
+
 void Renderer::shutdown()
 {
    destroyTargets();
@@ -425,6 +430,7 @@ void Renderer::render(
       if (mesh_surface)
       {
          _mesher.build(world.positions(), world.settings()._particle_spacing, world.domain());
+         _mesh_build_time = _mesher.buildTime();
          const auto surface_vertices = _mesher.vertices();
          surface_vertex_count = static_cast<GLsizei>(surface_vertices.size() / 3);
          gl::BindBuffer(GL_ARRAY_BUFFER, _surface_buffer);

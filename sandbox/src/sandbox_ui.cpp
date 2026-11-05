@@ -97,6 +97,7 @@ void drawSimulationSection(tinysph::World& world, SandboxState& state)
    );
    ImGui::Text("solver         %.1f ms / frame", statistics._wall_time.count());
    ImGui::Text("frame          %.1f ms", state._frame_time.count());
+   ImGui::Text("surface mesh   %.1f ms", state._mesh_time.count());
    ImGui::Text("sim speed      %.2fx real time", realtime_ratio);
    ImGui::Text("density        avg %.3f  max %.3f  (rho/rho0)", statistics._average_density_ratio, statistics._max_density_ratio);
    ImGui::Text("max speed      %.2f m/s", statistics._max_speed);
