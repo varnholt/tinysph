@@ -1,5 +1,7 @@
 # tinysph
 
+[![CI](https://github.com/varnholt/tinysph/actions/workflows/ci.yml/badge.svg)](https://github.com/varnholt/tinysph/actions/workflows/ci.yml)
+
 A tiny C++23 library for smoothed particle hydrodynamics (SPH): fluid volumes, colliders, force fields and emitters
 behind one small API, with no dependencies beyond the standard library. Comes with an interactive sandbox that renders
 the fluid as a surface with reflection and refraction, and lets you poke the water with the mouse.
@@ -83,7 +85,7 @@ Design rules that keep it stable:
 
 ## Build
 
-Requirements: CMake 3.25+, a C++23 compiler (tested with MSVC 19.44 / Visual Studio 2022).
+Requirements: CMake 3.25+ and a C++23 compiler. CI builds and tests with MSVC (Visual Studio 2022), GCC 14, Clang 20 and AppleClang (macOS 15).
 The sandbox fetches SDL3 and Dear ImGui.
 
 ```

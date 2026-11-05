@@ -45,13 +45,15 @@ TEST_CASE("internal: neighbor search matches brute force")
          particle_index, [&](std::size_t neighbor_index, const tinysph::Vec3&, float) { grid_neighbors.push_back(neighbor_index); }
       );
 
-      const auto brute_force_neighbors =
-         all_indices |
-         std::views::filter(
-            [&](std::size_t neighbor_index)
-            { return tinysph::lengthSquared(positions[particle_index] - positions[neighbor_index]) < support_radius_squared; }
-         ) |
-         std::ranges::to<std::vector>();
+      // a plain loop instead of ranges::to, which clang 20 cannot compile with libstdc++ 14
+      std::vector<std::size_t> brute_force_neighbors;
+      for (const auto neighbor_index : all_indices)
+      {
+         if (tinysph::lengthSquared(positions[particle_index] - positions[neighbor_index]) < support_radius_squared)
+         {
+            brute_force_neighbors.push_back(neighbor_index);
+         }
+      }
 
       std::ranges::sort(grid_neighbors);
       if (grid_neighbors != brute_force_neighbors)
