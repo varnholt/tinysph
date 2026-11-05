@@ -66,6 +66,8 @@ add_executable(
     src/sandbox_scene.h
     src/sandbox_ui.cpp
     src/sandbox_ui.h
+    src/surface_mesher.cpp
+    src/surface_mesher.h
     src/shader_sources.h)
 target_link_libraries(tinysph_sandbox PRIVATE tinysph::tinysph tinysph_warnings imgui
                                               SDL3::SDL3-static OpenGL::GL)

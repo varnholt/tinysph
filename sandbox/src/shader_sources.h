@@ -258,7 +258,11 @@ uniform float u_depth_falloff;     // depth difference in m at which samples sto
 
 out float out_depth;
 
-const int max_radius = 24;
+// a fixed number of taps with a variable step, so the filter reaches any radius at the same cost.
+// close to the camera a particle covers dozens of pixels; a filter capped at a few pixels left every particle
+// visible as a bump, which turned into noisy normals and blotchy refraction
+const int tap_count = 16;
+const float max_radius = 256.0;
 
 void main()
 {
@@ -269,23 +273,41 @@ void main()
       return;
    }
 
-   float radius = clamp(u_world_radius * u_pixels_per_meter / depth, 1.0, float(max_radius));
+   float radius = clamp(u_world_radius * u_pixels_per_meter / depth, 1.0, max_radius);
+   float step_size = max(1.0, radius / float(tap_count));
+
+   // neighbors are compared against the local surface plane, not against the center depth: seen at a grazing
+   // angle, depth changes a lot between pixels of the same flat surface, and a constant depth range then cut the
+   // surface into one patch per particle. the slope is measured over a quarter of the radius, from the side that
+   // changes less, so a silhouette next to the pixel does not tilt the plane
+   float baseline = max(1.0, radius * 0.25);
+   float forward_depth = texture(u_depth, v_uv + baseline * u_direction).r;
+   float backward_depth = texture(u_depth, v_uv - baseline * u_direction).r;
+   float forward_slope = forward_depth > 0.0 ? (forward_depth - depth) / baseline : 1e6;
+   float backward_slope = backward_depth > 0.0 ? (depth - backward_depth) / baseline : 1e6;
+   // both sides agree on a smooth surface: use the central slope, which does not flip from pixel to pixel;
+   // only near an edge fall back to the calmer side
+   float slope = abs(forward_slope - backward_slope) < 0.5 * u_depth_falloff / baseline ? 0.5 * (forward_slope + backward_slope)
+               : abs(forward_slope) < abs(backward_slope)                                ? forward_slope
+                                                                                          : backward_slope;
+   slope = abs(slope) < 1e5 ? slope : 0.0;
    float sigma = radius * 0.5;
    float sum = 0.0;
    float weight_sum = 0.0;
-   for (int offset = -max_radius; offset <= max_radius; ++offset)
+   for (int tap = -tap_count; tap <= tap_count; ++tap)
    {
-      if (abs(float(offset)) > radius)
+      float offset = float(tap) * step_size;
+      if (abs(offset) > radius)
       {
          continue;
       }
-      float sample_depth = texture(u_depth, v_uv + float(offset) * u_direction).r;
+      float sample_depth = texture(u_depth, v_uv + offset * u_direction).r;
       if (sample_depth <= 0.0)
       {
          continue;
       }
-      float spatial = exp(-float(offset * offset) / (2.0 * sigma * sigma));
-      float difference = (sample_depth - depth) / u_depth_falloff;
+      float spatial = exp(-offset * offset / (2.0 * sigma * sigma));
+      float difference = (sample_depth - (depth + slope * offset)) / u_depth_falloff;
       float range = exp(-difference * difference);
       sum += sample_depth * spatial * range;
       weight_sum += spatial * range;
@@ -380,7 +402,8 @@ void main()
    vec3 transmittance = exp(-u_absorption * (thickness + 4.0 * u_radius));
    vec3 refraction = refracted_scene * transmittance + u_fluid_color * (1.0 - transmittance);
 
-   float specular = pow(max(dot(normal, normalize(u_light_view + view_direction)), 0.0), 400.0);
+   // a broad highlight: a very sharp one turns every small normal error into a bright fleck
+   float specular = pow(max(dot(normal, normalize(u_light_view + view_direction)), 0.0), 120.0) * 0.6;
 
    vec3 color = mix(refraction, reflection, fresnel) + vec3(specular * 1.5);
 
@@ -390,6 +413,57 @@ void main()
 
    vec4 clip_position = u_projection * vec4(position, 1.0);
    gl_FragDepth = clip_position.z / clip_position.w * 0.5 + 0.5;
+}
+)";
+
+// ----------------------------------------------------------------------------------------------------
+// mesh surface: depth and thickness come from a closed triangle mesh instead of particle sprites
+// ----------------------------------------------------------------------------------------------------
+
+inline constexpr const char* surface_vertex = R"(
+layout(location = 0) in vec3 in_position;
+
+uniform mat4 u_view;
+uniform mat4 u_projection;
+
+out float v_depth;
+
+void main()
+{
+   vec4 view_position = u_view * vec4(in_position, 1.0);
+   gl_Position = u_projection * view_position;
+   v_depth = -view_position.z;
+}
+)";
+
+inline constexpr const char* surface_depth_fragment = R"(
+in float v_depth;
+out float out_depth;
+
+void main()
+{
+   out_depth = v_depth;
+}
+)";
+
+/// back faces add their depth, front faces subtract it: the sum is the water length along the ray, also through
+/// several layers. depths are clipped to solid geometry, so water touching the floor does not go negative
+inline constexpr const char* surface_thickness_fragment = R"(
+in float v_depth;
+
+uniform sampler2D u_scene_depth;
+uniform vec2 u_texel;
+uniform float u_near;
+uniform float u_far;
+
+out float out_thickness;
+
+void main()
+{
+   float buffer_depth = texture(u_scene_depth, gl_FragCoord.xy * u_texel).r * 2.0 - 1.0;
+   float scene_depth = 2.0 * u_near * u_far / (u_far + u_near - buffer_depth * (u_far - u_near));
+   float depth = min(v_depth, scene_depth);
+   out_thickness = gl_FrontFacing ? -depth : depth;
 }
 )";
 

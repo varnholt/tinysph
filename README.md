@@ -42,7 +42,7 @@ FetchContent:
 
 ```cmake
 include(FetchContent)
-FetchContent_Declare(tinysph GIT_REPOSITORY https://github.com/varnholt/tinysph.git GIT_TAG main)
+FetchContent_Declare(tinysph GIT_REPOSITORY https://github.com/varnholt/tinysph.git GIT_TAG v0.1.0)
 FetchContent_MakeAvailable(tinysph)
 target_link_libraries(your_target PRIVATE tinysph::tinysph)
 ```

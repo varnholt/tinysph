@@ -7,12 +7,14 @@
 
 #include "camera.h"
 #include "sandbox_scene.h"
+#include "surface_mesher.h"
 #include "tinysph/tinysph.h"
 
 enum class RenderMode : int32_t
 {
    Spheres = 0,       //!< every particle as a shaded sphere
    FluidSurface = 1,  //!< screen space fluid: smoothed hull with reflection and refraction
+   MeshSurface = 2,   //!< one closed triangle mesh around the particles, same shading as the fluid surface
 };
 
 enum class ColorMode : int32_t
@@ -24,7 +26,7 @@ enum class ColorMode : int32_t
 
 struct RenderSettings
 {
-   RenderMode _render_mode{RenderMode::FluidSurface};
+   RenderMode _render_mode{RenderMode::MeshSurface};
    bool _show_helpers{true};  //!< container, emitters and fields as lines
    bool _show_floor{true};
 
@@ -35,11 +37,11 @@ struct RenderSettings
 
    // fluid surface mode
    int32_t _smoothing_iterations{3};                        //!< bilateral filter passes; more = smoother hull
-   float _smoothing_radius{2.5f};                           //!< filter radius in particle radii
+   float _smoothing_radius{4.0f};                           //!< filter radius in particle radii
    float _refraction_strength{0.15f};                       //!< screen space offset per meter of thickness
    std::array<float, 3> _fluid_color{0.03f, 0.22f, 0.38f};  //!< color deep water scatters towards
    std::array<float, 3> _absorption{3.5f, 1.1f, 0.55f};     //!< beer-lambert coefficients per meter, red is absorbed first
-   bool _separate_spray{true};                              //!< draw sparse particles as foam droplets instead of surface
+   bool _separate_spray{false};                             //!< draw sparse particles as foam droplets instead of surface
    float _spray_threshold{0.35f};                           //!< rho / rho0 below which a particle counts as spray
 };
 
@@ -101,6 +103,12 @@ private:
    uint32_t _fluid_thickness_program{0};
    uint32_t _fluid_smooth_program{0};
    uint32_t _fluid_composite_program{0};
+   uint32_t _surface_depth_program{0};
+   uint32_t _surface_thickness_program{0};
+   uint32_t _surface_vertex_array{0};
+   uint32_t _surface_buffer{0};
+   uint32_t _surface_thickness_framebuffer{0};  //!< thickness without the scene depth attached, it is sampled instead
+   SurfaceMesher _mesher;
    uint32_t _line_program{0};
 
    // geometry

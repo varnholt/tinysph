@@ -169,6 +169,12 @@ bool Renderer::initialize()
    _fluid_thickness_program = linkProgram({shaders::particle_vertex}, {shaders::sphere_normal_function, shaders::fluid_thickness_fragment});
    _fluid_smooth_program = linkProgram({shaders::fullscreen_vertex}, {shaders::fluid_smooth_fragment});
    _fluid_composite_program = linkProgram({shaders::fullscreen_vertex}, {shaders::sky_function, shaders::fluid_composite_fragment});
+   _surface_depth_program = linkProgram({shaders::surface_vertex}, {shaders::surface_depth_fragment});
+   _surface_thickness_program = linkProgram({shaders::surface_vertex}, {shaders::surface_thickness_fragment});
+   if (_surface_depth_program == 0 || _surface_thickness_program == 0)
+   {
+      return false;
+   }
    _line_program = linkProgram({shaders::line_vertex}, {shaders::line_fragment});
 
    const auto programs = {
@@ -190,6 +196,7 @@ bool Renderer::initialize()
    setupVertexArray(_particle_vertex_array, _particle_buffer, {3, 1, 1});
    setupVertexArray(_mesh_vertex_array, _mesh_buffer, {3, 3, 3});
    setupVertexArray(_line_vertex_array, _line_buffer, {3, 3});
+   setupVertexArray(_surface_vertex_array, _surface_buffer, {3});
    return true;
 }
 
@@ -270,7 +277,11 @@ void Renderer::resizeTargets(int32_t width, int32_t height)
    // float textures are sampled with nearest filtering; linear filtering of float textures is optional in gles 3.0
    create_target(_scene_target, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR, true);
    create_target(_fluid_depth_target, GL_R32F, GL_RED, GL_FLOAT, GL_NEAREST, true);
-   create_target(_thickness_target, GL_R16F, GL_RED, GL_FLOAT, GL_NEAREST, false);
+   // 32 bit, because the mesh thickness is a difference of depths
+   create_target(_thickness_target, GL_R32F, GL_RED, GL_FLOAT, GL_NEAREST, false);
+   gl::GenFramebuffers(1, &_surface_thickness_framebuffer);
+   gl::BindFramebuffer(GL_FRAMEBUFFER, _surface_thickness_framebuffer);
+   gl::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _thickness_target._color_texture, 0);
 
    // the thickness pass shares the scene depth (read only) so fluid behind solid geometry is not counted
    gl::BindFramebuffer(GL_FRAMEBUFFER, _thickness_target._framebuffer);
@@ -302,7 +313,8 @@ void Renderer::render(
       return;
    }
 
-   const auto fluid_surface = settings._render_mode == RenderMode::FluidSurface;
+   const auto mesh_surface = settings._render_mode == RenderMode::MeshSurface;
+   const auto fluid_surface = settings._render_mode == RenderMode::FluidSurface || mesh_surface;
    if (fluid_surface)
    {
       resizeTargets(framebuffer_width, framebuffer_height);
@@ -408,11 +420,36 @@ void Renderer::render(
       // sparse particles stay out of the surface passes when they are drawn as spray
       const auto surface_filter = settings._separate_spray ? ParticleFilter::Bulk : ParticleFilter::All;
 
+      // mesh surface: one closed mesh gives exact depth and thickness, so the sprite passes are skipped
+      auto surface_vertex_count = 0;
+      if (mesh_surface)
+      {
+         _mesher.build(world.positions(), world.settings()._particle_spacing, world.domain());
+         const auto surface_vertices = _mesher.vertices();
+         surface_vertex_count = static_cast<GLsizei>(surface_vertices.size() / 3);
+         gl::BindBuffer(GL_ARRAY_BUFFER, _surface_buffer);
+         gl::BufferData(
+            GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(surface_vertices.size() * sizeof(float)), surface_vertices.data(), GL_STREAM_DRAW
+         );
+      }
+      const auto draw_surface = [&](uint32_t program)
+      {
+         gl::UseProgram(program);
+         setUniform(program, "u_view", view);
+         setUniform(program, "u_projection", projection);
+         gl::BindVertexArray(_surface_vertex_array);
+         glDrawArrays(GL_TRIANGLES, 0, surface_vertex_count);
+      };
+
       // 2b) fluid depth: front most sphere surface, linear eye depth, 0 = empty
       gl::BindFramebuffer(GL_FRAMEBUFFER, _fluid_depth_target._framebuffer);
       glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-      if (particle_count > 0)
+      if (mesh_surface)
+      {
+         draw_surface(_surface_depth_program);
+      }
+      else if (particle_count > 0)
       {
          set_particle_uniforms(_fluid_depth_program, particle_radius, surface_filter);
          glDrawArrays(GL_POINTS, 0, particle_count);
@@ -420,13 +457,27 @@ void Renderer::render(
 
       // 3) thickness: additive, so it measures all fluid along the ray. depth tested (without writing) against the
       //    scene depth, otherwise water hidden behind a collider counts as well and thin films in front of it turn dark.
-      gl::BindFramebuffer(GL_FRAMEBUFFER, _thickness_target._framebuffer);
+      gl::BindFramebuffer(GL_FRAMEBUFFER, mesh_surface ? _surface_thickness_framebuffer : _thickness_target._framebuffer);
       glClear(GL_COLOR_BUFFER_BIT);
       glEnable(GL_DEPTH_TEST);
       glDepthMask(GL_FALSE);
       glEnable(GL_BLEND);
       glBlendFunc(GL_ONE, GL_ONE);
-      if (particle_count > 0)
+      if (mesh_surface)
+      {
+         glDisable(GL_DEPTH_TEST);
+         gl::UseProgram(_surface_thickness_program);
+         bindTexture(_surface_thickness_program, "u_scene_depth", 0, _scene_target._depth_texture);
+         gl::Uniform2f(
+            gl::GetUniformLocation(_surface_thickness_program, "u_texel"),
+            1.0f / static_cast<float>(framebuffer_width),
+            1.0f / static_cast<float>(framebuffer_height)
+         );
+         setUniform(_surface_thickness_program, "u_near", OrbitCamera::near_plane);
+         setUniform(_surface_thickness_program, "u_far", OrbitCamera::far_plane);
+         draw_surface(_surface_thickness_program);
+      }
+      else if (particle_count > 0)
       {
          set_particle_uniforms(_fluid_thickness_program, particle_radius, surface_filter);
          glDrawArrays(GL_POINTS, 0, particle_count);
@@ -441,7 +492,13 @@ void Renderer::render(
       const auto texel_x = 1.0f / static_cast<float>(framebuffer_width);
       const auto texel_y = 1.0f / static_cast<float>(framebuffer_height);
       auto source_texture = _fluid_depth_target._color_texture;
-      for (auto iteration = 0; iteration < settings._smoothing_iterations; ++iteration)
+      // the mesh is already one smooth surface; it only gets a light pass against the faceting of the triangles
+      const auto smoothing_iterations = mesh_surface ? 1 : settings._smoothing_iterations;
+      if (mesh_surface)
+      {
+         setUniform(_fluid_smooth_program, "u_world_radius", particle_radius * 1.0f);
+      }
+      for (auto iteration = 0; iteration < smoothing_iterations; ++iteration)
       {
          gl::BindFramebuffer(GL_FRAMEBUFFER, _smooth_targets[0]._framebuffer);
          bindTexture(_fluid_smooth_program, "u_depth", 0, source_texture);
@@ -488,7 +545,7 @@ void Renderer::render(
       gl::ActiveTexture(GL_TEXTURE0);
 
       // 6) spray: sparse particles as small foam droplets, depth tested against the surface
-      if (settings._separate_spray && particle_count > 0)
+      if (settings._separate_spray && !mesh_surface && particle_count > 0)
       {
          set_particle_uniforms(_sphere_program, particle_radius * 0.6f, ParticleFilter::Spray);
          gl::Uniform1i(gl::GetUniformLocation(_sphere_program, "u_color_mode"), 3);

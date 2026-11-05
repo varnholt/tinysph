@@ -405,6 +405,9 @@ void drawRenderSection(SandboxState& state)
    ImGui::RadioButton("spheres", &render_mode, std::to_underlying(RenderMode::Spheres));
    ImGui::SameLine();
    ImGui::RadioButton("fluid surface", &render_mode, std::to_underlying(RenderMode::FluidSurface));
+   ImGui::SameLine();
+   ImGui::RadioButton("mesh surface", &render_mode, std::to_underlying(RenderMode::MeshSurface));
+   ImGui::SetItemTooltip("one closed triangle mesh around the particles (marching tetrahedra), built on the cpu every frame");
    ImGui::SetItemTooltip("smoothed hull around the particles with reflection and refraction (screen space fluid)");
    render_settings._render_mode = static_cast<RenderMode>(render_mode);
 
