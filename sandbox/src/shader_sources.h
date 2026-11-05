@@ -275,6 +275,18 @@ void main()
 
    float radius = clamp(u_world_radius * u_pixels_per_meter / depth, 1.0, max_radius);
    float step_size = max(1.0, radius / float(tap_count));
+
+   // neighbors are compared against the local surface plane, not against the center depth: seen at a grazing
+   // angle, depth changes a lot between pixels of the same flat surface, and a constant depth range then cut the
+   // surface into one patch per particle. the slope is measured over a quarter of the radius, from the side that
+   // changes less, so a silhouette next to the pixel does not tilt the plane
+   float baseline = max(1.0, radius * 0.25);
+   float forward_depth = texture(u_depth, v_uv + baseline * u_direction).r;
+   float backward_depth = texture(u_depth, v_uv - baseline * u_direction).r;
+   float forward_slope = forward_depth > 0.0 ? (forward_depth - depth) / baseline : 1e6;
+   float backward_slope = backward_depth > 0.0 ? (depth - backward_depth) / baseline : 1e6;
+   float slope = abs(forward_slope) < abs(backward_slope) ? forward_slope : backward_slope;
+   slope = abs(slope) < 1e5 ? slope : 0.0;
    float sigma = radius * 0.5;
    float sum = 0.0;
    float weight_sum = 0.0;
@@ -291,7 +303,7 @@ void main()
          continue;
       }
       float spatial = exp(-offset * offset / (2.0 * sigma * sigma));
-      float difference = (sample_depth - depth) / u_depth_falloff;
+      float difference = (sample_depth - (depth + slope * offset)) / u_depth_falloff;
       float range = exp(-difference * difference);
       sum += sample_depth * spatial * range;
       weight_sum += spatial * range;

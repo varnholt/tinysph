@@ -102,9 +102,11 @@ int main(int argument_count, char** arguments)
    }
 
    SandboxState state;
-   // --preset <index> starts with another scene, --spheres with sphere rendering, --zoom <wheel steps> moves the camera in
+   // --preset <index> starts with another scene, --spheres with sphere rendering, --zoom <wheel steps> moves the camera in, --tilt
+   // <radians> changes its pitch
    const std::span<char*> argument_list{arguments, static_cast<std::size_t>(argument_count)};
    auto zoom_steps = 0.0f;
+   auto tilt = 0.0f;  //!< added to the camera pitch in radians, negative looks flatter
    for (const auto [argument, value] : std::views::zip(argument_list, argument_list | std::views::drop(1)))
    {
       if (std::string_view{argument} == "--preset")
@@ -114,6 +116,10 @@ int main(int argument_count, char** arguments)
       if (std::string_view{argument} == "--zoom")
       {
          zoom_steps = static_cast<float>(std::atof(value));
+      }
+      if (std::string_view{argument} == "--tilt")
+      {
+         tilt = static_cast<float>(std::atof(value));
       }
    }
    if (std::ranges::contains(
@@ -129,6 +135,7 @@ int main(int argument_count, char** arguments)
    OrbitCamera camera;
    camera.frame(state._scene._domain);
    camera.zoom(zoom_steps);
+   camera.orbit(0.0f, tilt);
 
    // the mouse tool is an ordinary force field that exists while the button is held
    std::optional<tinysph::ForceFieldId> mouse_field_id;

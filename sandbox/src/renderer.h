@@ -39,7 +39,7 @@ struct RenderSettings
    float _refraction_strength{0.15f};                       //!< screen space offset per meter of thickness
    std::array<float, 3> _fluid_color{0.03f, 0.22f, 0.38f};  //!< color deep water scatters towards
    std::array<float, 3> _absorption{3.5f, 1.1f, 0.55f};     //!< beer-lambert coefficients per meter, red is absorbed first
-   bool _separate_spray{true};                              //!< draw sparse particles as foam droplets instead of surface
+   bool _separate_spray{false};                             //!< draw sparse particles as foam droplets instead of surface
    float _spray_threshold{0.35f};                           //!< rho / rho0 below which a particle counts as spray
 };
 
