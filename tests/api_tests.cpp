@@ -1,8 +1,12 @@
 // tests that only use the public api, the way a library user would
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <functional>
 #include <print>
+#include <ranges>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -10,8 +14,12 @@
 #include "test_scenes.h"
 #include "tinysph/tinysph.h"
 
+using namespace std::chrono_literals;
+
 namespace
 {
+
+constexpr auto frame_time = 1s / 60.0;
 
 bool isFinite(const tinysph::Vec3& value)
 {
@@ -20,11 +28,7 @@ bool isFinite(const tinysph::Vec3& value)
 
 float meanSpeed(const tinysph::World& world)
 {
-   auto speed_sum = 0.0f;
-   for (const auto& velocity : world.velocities())
-   {
-      speed_sum += tinysph::length(velocity);
-   }
+   const auto speed_sum = std::ranges::fold_left(world.velocities() | std::views::transform(tinysph::length), 0.0f, std::plus{});
    return speed_sum / static_cast<float>(world.particleCount());
 }
 
@@ -35,6 +39,55 @@ TEST_CASE("version header matches the cmake project version")
    CHECK(tinysph::version.major == TINYSPH_PROJECT_VERSION_MAJOR);
    CHECK(tinysph::version.minor == TINYSPH_PROJECT_VERSION_MINOR);
    CHECK(tinysph::version.patch == TINYSPH_PROJECT_VERSION_PATCH);
+}
+
+TEST_CASE("invalid settings are reported, not crashed on")
+{
+   CHECK(tinysph::World::validate({}).has_value());
+   CHECK(tinysph::World::create().has_value());
+
+   const auto check_rejected = [](const tinysph::WorldSettings& settings, tinysph::SettingsError expected_error)
+   {
+      const auto world = tinysph::World::create(settings);
+      CHECK_MESSAGE(!world.has_value() && world.error() == expected_error, "expected '{}'", tinysph::describe(expected_error));
+   };
+   check_rejected({._particle_spacing = 0.0f}, tinysph::SettingsError::NonPositiveSpacing);
+   check_rejected({._particle_spacing = std::nanf("")}, tinysph::SettingsError::NonPositiveSpacing);
+   check_rejected({._rest_density = -1.0f}, tinysph::SettingsError::NonPositiveRestDensity);
+   check_rejected({._support_radius_factor = 0.5f}, tinysph::SettingsError::SupportRadiusTooSmall);
+   check_rejected({._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}}}, tinysph::SettingsError::EmptyDomain);
+   check_rejected(
+      {._domain = {{0.0f, 0.0f, 0.0f}, {100.0f, 100.0f, 100.0f}}, ._particle_spacing = 0.001f}, tinysph::SettingsError::TooManyGridCells
+   );
+   check_rejected({._max_particles = 0}, tinysph::SettingsError::ZeroParticleCap);
+
+   auto threw = false;
+   try
+   {
+      tinysph::World world{{._particle_spacing = -1.0f}};
+   }
+   catch (const std::invalid_argument&)
+   {
+      threw = true;
+   }
+   CHECK(threw);
+}
+
+TEST_CASE("step takes any std::chrono duration")
+{
+   tinysph::World world{{}, {._gravity = {}}};
+   world.addFluid(tinysph::Sphere{{0.5f, 0.5f, 0.5f}, 0.1f});
+
+   // the substeps add up in float, so compare with a tolerance
+   const auto matches = [](tinysph::Seconds simulated, tinysph::Seconds requested)
+   { return std::abs((simulated - requested).count()) < 1e-6f; };
+   CHECK(matches(world.step(16ms)._simulated_time, 16ms));
+   CHECK(matches(world.step(frame_time)._simulated_time, frame_time));
+
+   // max_substeps caps the work; the statistics tell how far it got
+   const auto capped = world.step(1s, 3);
+   CHECK(capped._substeps == 3);
+   CHECK(capped._simulated_time < 1s);
 }
 
 TEST_CASE("handles are unique, stale handles are rejected")
@@ -66,7 +119,7 @@ TEST_CASE("handles are unique, stale handles are rejected")
 
    const auto emitter = world.addEmitter(tinysph::Emitter{});
    CHECK(world.setEmitter(emitter, tinysph::Emitter{._enabled = false}));
-   CHECK(world.emitter(emitter).has_value() && !world.emitter(emitter)->_enabled);
+   CHECK(world.emitter(emitter).transform([](const tinysph::Emitter& stored) { return !stored._enabled; }).value_or(false));
    CHECK(world.removeEmitter(emitter));
 }
 
@@ -94,7 +147,7 @@ TEST_CASE("particles follow a shrinking domain")
    tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}}};
    world.addFluid(tinysph::Box{{0.5f, 0.2f, 0.5f}, {0.45f, 0.15f, 0.45f}});
    world.setDomain({{0.0f, 0.0f, 0.0f}, {0.6f, 1.0f, 1.0f}});
-   world.step(1.0f / 60.0f);
+   world.step(frame_time);
 
    const auto& domain = world.domain();
    const auto outside = std::ranges::count_if(world.positions(), [&](const tinysph::Vec3& position) { return !domain.contains(position); });
@@ -106,7 +159,7 @@ TEST_CASE("a world can be moved")
    auto world = test::makeDamBreakWorld();
    const auto particle_count = world.particleCount();
    tinysph::World moved{std::move(world)};
-   moved.step(1.0f / 60.0f);
+   moved.step(frame_time);
    CHECK(moved.particleCount() == particle_count);
 }
 
@@ -119,22 +172,25 @@ TEST_CASE("dam break stays stable and inside the domain")
    const auto rest_density = world.settings()._rest_density;
    auto max_density_ratio = 0.0f;
    auto max_p99_density_ratio = 0.0f;
-   auto wall_ms = 0.0;
+   tinysph::Milliseconds wall_time{};
    std::vector<float> sorted_densities;
    for (auto frame = 0; frame < 90; ++frame)
    {
-      const auto statistics = world.step(1.0f / 60.0f);
+      const auto statistics = world.step(frame_time);
       max_density_ratio = std::max(max_density_ratio, statistics._max_density_ratio);
-      wall_ms += statistics._step_ms;
+      wall_time += statistics._wall_time;
 
       // single particles spike at impacts; the 99th percentile shows how compressible the bulk is
-      sorted_densities.assign(world.densities().begin(), world.densities().end());
+      sorted_densities.assign_range(world.densities());
       const auto p99_position = sorted_densities.begin() + static_cast<std::ptrdiff_t>(sorted_densities.size() * 99 / 100);
       std::ranges::nth_element(sorted_densities, p99_position);
       max_p99_density_ratio = std::max(max_p99_density_ratio, *p99_position / rest_density);
    }
    std::println(
-      "   1.5 s simulated in {:.2f} s, max density ratio {:.3f}, p99 {:.3f}", wall_ms / 1000.0, max_density_ratio, max_p99_density_ratio
+      "   1.5 s simulated in {:.2f} s, max density ratio {:.3f}, p99 {:.3f}",
+      std::chrono::duration<double>{wall_time}.count(),
+      max_density_ratio,
+      max_p99_density_ratio
    );
 
    CHECK(world.particleCount() == particle_count);
@@ -146,10 +202,9 @@ TEST_CASE("dam break stays stable and inside the domain")
    auto escaped_count = 0;
    auto non_finite_count = 0;
    auto inside_collider_count = 0;
-   for (std::size_t particle_index = 0; particle_index < world.particleCount(); ++particle_index)
+   for (const auto& [position, velocity] : std::views::zip(world.positions(), world.velocities()))
    {
-      const auto& position = world.positions()[particle_index];
-      if (!isFinite(position) || !isFinite(world.velocities()[particle_index]))
+      if (!isFinite(position) || !isFinite(velocity))
       {
          ++non_finite_count;
          continue;
@@ -174,7 +229,7 @@ TEST_CASE("dam break comes to rest")
    auto world = test::makeDamBreakWorld();
    for (auto frame = 0; frame < 240; ++frame)
    {
-      world.step(1.0f / 60.0f);
+      world.step(frame_time);
    }
    const auto mean_speed = meanSpeed(world);
    CHECK_MESSAGE(mean_speed < 0.05f, "mean speed after 4 s is {:.3f} m/s", mean_speed);
@@ -188,17 +243,18 @@ TEST_CASE("emitter spawns whole layers at the expected rate")
    world.addEmitter({._position = {0.5f, 0.1f, 0.5f}, ._velocity = {0.0f, speed, 0.0f}, ._radius = 0.04f});
 
    // slightly more than the time for one layer
-   const auto first_time = spacing / speed * 1.01f;
+   const tinysph::Seconds first_time{spacing / speed * 1.01f};
    world.step(first_time);
    const auto layer_size = world.particleCount();
    CHECK(layer_size > 0);
 
    for (auto frame = 0; frame < 6; ++frame)
    {
-      world.step(1.0f / 60.0f);
+      world.step(frame_time);
    }
 
-   const auto expected_layers = std::floor(speed * (first_time + 6.0f / 60.0f) / spacing);
+   const auto total_time = first_time + 6 * tinysph::Seconds{frame_time};
+   const auto expected_layers = std::floor(speed * total_time.count() / spacing);
    const auto layers = static_cast<float>(world.particleCount()) / static_cast<float>(layer_size);
    CHECK_MESSAGE(std::abs(layers - expected_layers) <= 1.0f, "{} layers emitted, expected {}", layers, expected_layers);
 }
@@ -208,14 +264,10 @@ TEST_CASE("an attractor pulls fluid towards it")
    tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}}, {._gravity = {}}};
    world.addFluid(tinysph::Sphere{{0.3f, 0.5f, 0.5f}, 0.1f});
    world.addForceField(tinysph::Attractor{{0.7f, 0.5f, 0.5f}, 30.0f, 0.6f});
-   world.step(0.2f);
+   world.step(200ms);
 
-   auto center_x = 0.0f;
-   for (const auto& position : world.positions())
-   {
-      center_x += position.x;
-   }
-   center_x /= static_cast<float>(world.particleCount());
+   const auto x_sum = std::ranges::fold_left(world.positions() | std::views::transform(&tinysph::Vec3::x), 0.0f, std::plus{});
+   const auto center_x = x_sum / static_cast<float>(world.particleCount());
    CHECK_MESSAGE(center_x > 0.35f, "fluid center moved to x = {:.3f}", center_x);
 }
 

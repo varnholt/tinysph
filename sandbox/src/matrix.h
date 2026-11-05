@@ -2,23 +2,20 @@
 
 #include <array>
 #include <cmath>
-#include <cstdint>
+#include <cstddef>
+#include <ranges>
 
 #include "tinysph/math.h"
 
-/// \brief column major 4x4 matrix, laid out the way opengl expects it.
+/// \brief column major 4x4 matrix, laid out the way opengl expects it. access with matrix[column, row].
 struct Mat4
 {
    std::array<float, 16> _values{};
 
-   [[nodiscard]] float& at(int32_t column, int32_t row)
+   /// \brief one definition for const and non-const access (deducing this), two indices in one subscript (c++23)
+   [[nodiscard]] constexpr auto&& operator[](this auto&& self, std::size_t column, std::size_t row)
    {
-      return _values[static_cast<std::size_t>(column * 4 + row)];
-   }
-
-   [[nodiscard]] float at(int32_t column, int32_t row) const
-   {
-      return _values[static_cast<std::size_t>(column * 4 + row)];
+      return std::forward_like<decltype(self)>(self._values[column * 4 + row]);
    }
 
    [[nodiscard]] const float* data() const
@@ -26,12 +23,12 @@ struct Mat4
       return _values.data();
    }
 
-   [[nodiscard]] static Mat4 identity()
+   [[nodiscard]] static constexpr Mat4 identity()
    {
       Mat4 result;
-      for (auto diagonal = 0; diagonal < 4; ++diagonal)
+      for (const auto diagonal : std::views::iota(0uz, 4uz))
       {
-         result.at(diagonal, diagonal) = 1.0f;
+         result[diagonal, diagonal] = 1.0f;
       }
       return result;
    }
@@ -40,11 +37,11 @@ struct Mat4
    {
       const auto focal_length = 1.0f / std::tan(field_of_view_y * 0.5f);
       Mat4 result;
-      result.at(0, 0) = focal_length / aspect_ratio;
-      result.at(1, 1) = focal_length;
-      result.at(2, 2) = (far_plane + near_plane) / (near_plane - far_plane);
-      result.at(2, 3) = -1.0f;
-      result.at(3, 2) = 2.0f * far_plane * near_plane / (near_plane - far_plane);
+      result[0, 0] = focal_length / aspect_ratio;
+      result[1, 1] = focal_length;
+      result[2, 2] = (far_plane + near_plane) / (near_plane - far_plane);
+      result[2, 3] = -1.0f;
+      result[3, 2] = 2.0f * far_plane * near_plane / (near_plane - far_plane);
       return result;
    }
 
@@ -55,35 +52,33 @@ struct Mat4
       const auto camera_up = tinysph::cross(right, forward);
 
       auto result = identity();
-      result.at(0, 0) = right.x;
-      result.at(1, 0) = right.y;
-      result.at(2, 0) = right.z;
-      result.at(0, 1) = camera_up.x;
-      result.at(1, 1) = camera_up.y;
-      result.at(2, 1) = camera_up.z;
-      result.at(0, 2) = -forward.x;
-      result.at(1, 2) = -forward.y;
-      result.at(2, 2) = -forward.z;
-      result.at(3, 0) = -tinysph::dot(right, eye);
-      result.at(3, 1) = -tinysph::dot(camera_up, eye);
-      result.at(3, 2) = tinysph::dot(forward, eye);
+      result[0, 0] = right.x;
+      result[1, 0] = right.y;
+      result[2, 0] = right.z;
+      result[0, 1] = camera_up.x;
+      result[1, 1] = camera_up.y;
+      result[2, 1] = camera_up.z;
+      result[0, 2] = -forward.x;
+      result[1, 2] = -forward.y;
+      result[2, 2] = -forward.z;
+      result[3, 0] = -tinysph::dot(right, eye);
+      result[3, 1] = -tinysph::dot(camera_up, eye);
+      result[3, 2] = tinysph::dot(forward, eye);
       return result;
    }
 
-   friend Mat4 operator*(const Mat4& lhs, const Mat4& rhs)
+   friend constexpr Mat4 operator*(const Mat4& lhs, const Mat4& rhs)
    {
       Mat4 result;
-      for (auto column = 0; column < 4; ++column)
+      const auto indices = std::views::iota(0uz, 4uz);
+      for (const auto [column, row] : std::views::cartesian_product(indices, indices))
       {
-         for (auto row = 0; row < 4; ++row)
+         auto sum = 0.0f;
+         for (const auto inner : indices)
          {
-            auto sum = 0.0f;
-            for (auto inner = 0; inner < 4; ++inner)
-            {
-               sum += lhs.at(inner, row) * rhs.at(column, inner);
-            }
-            result.at(column, row) = sum;
+            sum += lhs[inner, row] * rhs[column, inner];
          }
+         result[column, row] = sum;
       }
       return result;
    }

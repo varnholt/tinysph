@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <random>
+#include <ranges>
 #include <vector>
 
 #include "solver.h"
@@ -34,22 +35,23 @@ TEST_CASE("internal: neighbor search matches brute force")
    const auto positions = solver.positions();
    const auto support_radius_squared = solver.supportRadius() * solver.supportRadius();
 
+   const auto all_indices = std::views::iota(0uz, positions.size());
+
    auto mismatches = 0;
-   for (std::size_t particle_index = 0; particle_index < positions.size(); ++particle_index)
+   for (const auto particle_index : all_indices)
    {
       std::vector<std::size_t> grid_neighbors;
       solver.forEachNeighbor(
          particle_index, [&](std::size_t neighbor_index, const tinysph::Vec3&, float) { grid_neighbors.push_back(neighbor_index); }
       );
 
-      std::vector<std::size_t> brute_force_neighbors;
-      for (std::size_t neighbor_index = 0; neighbor_index < positions.size(); ++neighbor_index)
-      {
-         if (tinysph::lengthSquared(positions[particle_index] - positions[neighbor_index]) < support_radius_squared)
-         {
-            brute_force_neighbors.push_back(neighbor_index);
-         }
-      }
+      const auto brute_force_neighbors =
+         all_indices |
+         std::views::filter(
+            [&](std::size_t neighbor_index)
+            { return tinysph::lengthSquared(positions[particle_index] - positions[neighbor_index]) < support_radius_squared; }
+         ) |
+         std::ranges::to<std::vector>();
 
       std::ranges::sort(grid_neighbors);
       if (grid_neighbors != brute_force_neighbors)
@@ -74,12 +76,12 @@ TEST_CASE("internal: resting lattice has the rest density")
 
    auto interior_count = 0;
    auto worst_error = 0.0f;
-   for (std::size_t particle_index = 0; particle_index < solver.particleCount(); ++particle_index)
+   for (const auto& [position, density] : std::views::zip(solver.positions(), solver.densities()))
    {
-      if (interior.contains(solver.positions()[particle_index]))
+      if (interior.contains(position))
       {
          ++interior_count;
-         worst_error = std::max(worst_error, std::abs(solver.densities()[particle_index] / rest_density - 1.0f));
+         worst_error = std::max(worst_error, std::abs(density / rest_density - 1.0f));
       }
    }
    CHECK(interior_count > 100);

@@ -1,6 +1,9 @@
 #include "tinysph/world.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -13,16 +16,55 @@ namespace tinysph
 namespace
 {
 
-/// \brief finds the slot of an id in a list of ids kept parallel to the solver's object list.
-template <class Id>
-std::optional<std::size_t> slotOf(const std::vector<Id>& ids, Id id)
+/// \brief objects of one kind stored in the solver, plus a parallel list with their handles.
+template <class Id, class Stored>
+class Slots
 {
-   const auto position = std::ranges::find(ids, id);
-   if (position == ids.end())
+public:
+   Slots(std::vector<Id>& ids, std::vector<Stored>& objects) : _ids(ids), _objects(objects)
    {
-      return std::nullopt;
    }
-   return static_cast<std::size_t>(position - ids.begin());
+
+   Id add(Id id, Stored object)
+   {
+      _objects.push_back(std::move(object));
+      return _ids.emplace_back(id);
+   }
+
+   /// \return the stored object, or nullptr if the id is unknown
+   [[nodiscard]] Stored* find(Id id)
+   {
+      const auto position = std::ranges::find(_ids, id);
+      return position == _ids.end() ? nullptr : &_objects[static_cast<std::size_t>(position - _ids.begin())];
+   }
+
+   bool remove(Id id)
+   {
+      const auto position = std::ranges::find(_ids, id);
+      if (position == _ids.end())
+      {
+         return false;
+      }
+      _objects.erase(_objects.begin() + (position - _ids.begin()));
+      _ids.erase(position);
+      return true;
+   }
+
+private:
+   std::vector<Id>& _ids;
+   std::vector<Stored>& _objects;
+};
+
+/// \brief rough upper bound so a tiny spacing in a huge domain fails cleanly instead of exhausting memory.
+constexpr double max_grid_cells = 128.0 * 1024.0 * 1024.0;
+
+[[noreturn]] void rejectSettings(SettingsError error)
+{
+#if defined(__cpp_exceptions)
+   throw std::invalid_argument{std::string{"tinysph::World: "} + std::string{describe(error)}};
+#else
+   std::abort();
+#endif
 }
 
 }  // namespace
@@ -34,9 +76,24 @@ struct World::Impl
    }
 
    template <class Id>
-   Id nextId()
+   [[nodiscard]] Id nextId()
    {
       return static_cast<Id>(_next_id++);
+   }
+
+   [[nodiscard]] auto colliders()
+   {
+      return Slots{_collider_ids, _solver.colliders()};
+   }
+
+   [[nodiscard]] auto forceFields()
+   {
+      return Slots{_force_field_ids, _solver.fields()};
+   }
+
+   [[nodiscard]] auto emitters()
+   {
+      return Slots{_emitter_ids, _solver.emitters()};
    }
 
    detail::Solver _solver;
@@ -46,7 +103,63 @@ struct World::Impl
    uint32_t _next_id{1};                        //!< ids are never reused, so a stale handle cannot hit a new object
 };
 
-World::World(const WorldSettings& settings, const FluidParameters& parameters) : _impl(std::make_unique<Impl>(settings, parameters))
+std::expected<void, SettingsError> World::validate(const WorldSettings& settings)
+{
+   // written as !(x > 0) so nan is rejected as well
+   if (!(settings._particle_spacing > 0.0f))
+   {
+      return std::unexpected{SettingsError::NonPositiveSpacing};
+   }
+   if (!(settings._rest_density > 0.0f))
+   {
+      return std::unexpected{SettingsError::NonPositiveRestDensity};
+   }
+   if (!(settings._support_radius_factor >= 1.0f))
+   {
+      return std::unexpected{SettingsError::SupportRadiusTooSmall};
+   }
+   if (settings._max_particles == 0)
+   {
+      return std::unexpected{SettingsError::ZeroParticleCap};
+   }
+   if (settings._backend != Backend::Cpu)
+   {
+      return std::unexpected{SettingsError::UnsupportedBackend};
+   }
+
+   const auto size = settings._domain.size();
+   const auto minimum_extent = settings._particle_spacing * 4.0f;
+   if (!(size.x >= minimum_extent && size.y >= minimum_extent && size.z >= minimum_extent))
+   {
+      return std::unexpected{SettingsError::EmptyDomain};
+   }
+
+   const auto cell_size = static_cast<double>(settings._particle_spacing * settings._support_radius_factor);
+   const auto cells_along = [&](float extent) { return static_cast<double>(extent) / cell_size + 3.0; };
+   if (cells_along(size.x) * cells_along(size.y) * cells_along(size.z) > max_grid_cells)
+   {
+      return std::unexpected{SettingsError::TooManyGridCells};
+   }
+
+   return {};
+}
+
+std::expected<World, SettingsError> World::create(const WorldSettings& settings, const FluidParameters& parameters)
+{
+   return validate(settings).transform([&]() { return World{settings, parameters}; });
+}
+
+World::World(const WorldSettings& settings, const FluidParameters& parameters)
+    : _impl(
+         [&]()
+         {
+            if (const auto valid = validate(settings); !valid)
+            {
+               rejectSettings(valid.error());
+            }
+            return std::make_unique<Impl>(settings, parameters);
+         }()
+      )
 {
 }
 
@@ -133,128 +246,86 @@ std::span<const float> World::densities() const
 
 ColliderId World::addCollider(const Shape& shape)
 {
-   _impl->_solver.colliders().push_back(shape);
-   return _impl->_collider_ids.emplace_back(_impl->nextId<ColliderId>());
+   return _impl->colliders().add(_impl->nextId<ColliderId>(), shape);
 }
 
 bool World::setCollider(ColliderId id, const Shape& shape)
 {
-   const auto slot = slotOf(_impl->_collider_ids, id);
-   if (!slot.has_value())
+   auto* const stored = _impl->colliders().find(id);
+   if (stored != nullptr)
    {
-      return false;
+      *stored = shape;
    }
-   _impl->_solver.colliders()[*slot] = shape;
-   return true;
+   return stored != nullptr;
 }
 
 bool World::removeCollider(ColliderId id)
 {
-   const auto slot = slotOf(_impl->_collider_ids, id);
-   if (!slot.has_value())
-   {
-      return false;
-   }
-   auto& colliders = _impl->_solver.colliders();
-   colliders.erase(colliders.begin() + static_cast<std::ptrdiff_t>(*slot));
-   _impl->_collider_ids.erase(_impl->_collider_ids.begin() + static_cast<std::ptrdiff_t>(*slot));
-   return true;
+   return _impl->colliders().remove(id);
 }
 
 std::optional<Shape> World::collider(ColliderId id) const
 {
-   const auto slot = slotOf(_impl->_collider_ids, id);
-   if (!slot.has_value())
-   {
-      return std::nullopt;
-   }
-   return _impl->_solver.colliders()[*slot];
+   const auto* const stored = _impl->colliders().find(id);
+   return stored != nullptr ? std::optional{*stored} : std::nullopt;
 }
 
 ForceFieldId World::addForceField(const ForceField& field)
 {
-   _impl->_solver.fields().push_back(field);
-   return _impl->_force_field_ids.emplace_back(_impl->nextId<ForceFieldId>());
+   return _impl->forceFields().add(_impl->nextId<ForceFieldId>(), field);
 }
 
 bool World::setForceField(ForceFieldId id, const ForceField& field)
 {
-   const auto slot = slotOf(_impl->_force_field_ids, id);
-   if (!slot.has_value())
+   auto* const stored = _impl->forceFields().find(id);
+   if (stored != nullptr)
    {
-      return false;
+      *stored = field;
    }
-   _impl->_solver.fields()[*slot] = field;
-   return true;
+   return stored != nullptr;
 }
 
 bool World::removeForceField(ForceFieldId id)
 {
-   const auto slot = slotOf(_impl->_force_field_ids, id);
-   if (!slot.has_value())
-   {
-      return false;
-   }
-   auto& fields = _impl->_solver.fields();
-   fields.erase(fields.begin() + static_cast<std::ptrdiff_t>(*slot));
-   _impl->_force_field_ids.erase(_impl->_force_field_ids.begin() + static_cast<std::ptrdiff_t>(*slot));
-   return true;
+   return _impl->forceFields().remove(id);
 }
 
 std::optional<ForceField> World::forceField(ForceFieldId id) const
 {
-   const auto slot = slotOf(_impl->_force_field_ids, id);
-   if (!slot.has_value())
-   {
-      return std::nullopt;
-   }
-   return _impl->_solver.fields()[*slot];
+   const auto* const stored = _impl->forceFields().find(id);
+   return stored != nullptr ? std::optional{*stored} : std::nullopt;
 }
 
 EmitterId World::addEmitter(const Emitter& emitter)
 {
-   _impl->_solver.emitters().push_back({emitter, 0.0f});
-   return _impl->_emitter_ids.emplace_back(_impl->nextId<EmitterId>());
+   return _impl->emitters().add(_impl->nextId<EmitterId>(), {emitter, 0.0f});
 }
 
 bool World::setEmitter(EmitterId id, const Emitter& emitter)
 {
-   const auto slot = slotOf(_impl->_emitter_ids, id);
-   if (!slot.has_value())
+   auto* const stored = _impl->emitters().find(id);
+   if (stored != nullptr)
    {
-      return false;
+      // keeps the travelled distance so editing a running emitter does not cause a gap or a double layer
+      stored->_emitter = emitter;
    }
-   // keeps the travelled distance so editing a running emitter does not cause a gap or a double layer
-   _impl->_solver.emitters()[*slot]._emitter = emitter;
-   return true;
+   return stored != nullptr;
 }
 
 bool World::removeEmitter(EmitterId id)
 {
-   const auto slot = slotOf(_impl->_emitter_ids, id);
-   if (!slot.has_value())
-   {
-      return false;
-   }
-   auto& emitters = _impl->_solver.emitters();
-   emitters.erase(emitters.begin() + static_cast<std::ptrdiff_t>(*slot));
-   _impl->_emitter_ids.erase(_impl->_emitter_ids.begin() + static_cast<std::ptrdiff_t>(*slot));
-   return true;
+   return _impl->emitters().remove(id);
 }
 
 std::optional<Emitter> World::emitter(EmitterId id) const
 {
-   const auto slot = slotOf(_impl->_emitter_ids, id);
-   if (!slot.has_value())
-   {
-      return std::nullopt;
-   }
-   return _impl->_solver.emitters()[*slot]._emitter;
+   const auto* const stored = _impl->emitters().find(id);
+   return stored != nullptr ? std::optional{stored->_emitter} : std::nullopt;
 }
 
-StepStatistics World::step(float time, int32_t max_substeps)
+StepStatistics World::step(Seconds time, int32_t max_substeps)
 {
-   return _impl->_solver.advance(time, max_substeps);
+   return _impl->_solver.advance(time.count(), max_substeps);
 }
 
 }  // namespace tinysph

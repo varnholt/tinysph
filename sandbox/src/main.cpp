@@ -213,7 +213,7 @@ int main(int, char**)
 
       if (state._running)
       {
-         state._statistics = world.step(1.0f / 60.0f * state._time_scale, state._max_substeps);
+         state._statistics = world.step(frame_time * state._time_scale, state._max_substeps);
       }
 
       ImGui_ImplOpenGL3_NewFrame();
@@ -230,7 +230,7 @@ int main(int, char**)
       SDL_GL_SwapWindow(window);
 
       const auto now = std::chrono::steady_clock::now();
-      state._frame_ms = static_cast<float>(std::chrono::duration<double, std::milli>(now - previous_frame).count());
+      state._frame_time = std::chrono::duration_cast<tinysph::Milliseconds>(now - previous_frame);
       previous_frame = now;
    }
 

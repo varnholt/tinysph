@@ -1,7 +1,10 @@
 #include "sandbox_ui.h"
 
+#include <chrono>
 #include <optional>
+#include <ranges>
 #include <string>
+#include <utility>
 #include <variant>
 
 #include <imgui.h>
@@ -23,7 +26,7 @@ float* asFloats(tinysph::Vec3& value)
 /// \brief draws one list entry; returns true when its remove button was pressed.
 ///        draw_body returns true when it changed something.
 template <class Function>
-bool listEntry(const std::string& label, std::size_t index, bool& changed, Function&& draw_body)
+bool listEntry(const std::string& label, std::ptrdiff_t index, bool& changed, Function&& draw_body)
 {
    ImGui::PushID(static_cast<int32_t>(index));
    auto remove_requested = false;
@@ -74,7 +77,7 @@ void drawSimulationSection(tinysph::World& world, SandboxState& state)
    ImGui::BeginDisabled(state._running);
    if (ImGui::Button("Step"))
    {
-      state._statistics = world.step(1.0f / 60.0f * state._time_scale, state._max_substeps);
+      state._statistics = world.step(frame_time * state._time_scale, state._max_substeps);
    }
    ImGui::EndDisabled();
    ImGui::SameLine();
@@ -87,11 +90,13 @@ void drawSimulationSection(tinysph::World& world, SandboxState& state)
    ImGui::SliderInt("max substeps / frame", &state._max_substeps, 1, 200);
 
    const auto& statistics = state._statistics;
-   const auto realtime_ratio = statistics._simulated_time / (1.0f / 60.0f);
+   const auto realtime_ratio = statistics._simulated_time / frame_time;
    ImGui::Text("particles      %zu", world.particleCount());
-   ImGui::Text("substeps       %d  (dt %.2f ms)", statistics._substeps, statistics._time_step * 1000.0f);
-   ImGui::Text("solver         %.1f ms / frame", statistics._step_ms);
-   ImGui::Text("frame          %.1f ms", state._frame_ms);
+   ImGui::Text(
+      "substeps       %d  (dt %.2f ms)", statistics._substeps, std::chrono::duration<float, std::milli>{statistics._time_step}.count()
+   );
+   ImGui::Text("solver         %.1f ms / frame", statistics._wall_time.count());
+   ImGui::Text("frame          %.1f ms", state._frame_time.count());
    ImGui::Text("sim speed      %.2fx real time", realtime_ratio);
    ImGui::Text("density        avg %.3f  max %.3f  (rho/rho0)", statistics._average_density_ratio, statistics._max_density_ratio);
    ImGui::Text("max speed      %.2f m/s", statistics._max_speed);
@@ -205,10 +210,9 @@ void drawCollidersSection(tinysph::World& world, SandboxState& state)
       add_collider(tinysph::Box{center, {0.1f, 0.1f, 0.1f}});
    }
 
-   std::optional<std::size_t> remove_index;
-   for (std::size_t collider_index = 0; collider_index < colliders.size(); ++collider_index)
+   std::optional<std::ptrdiff_t> remove_index;
+   for (auto&& [collider_index, collider] : std::views::enumerate(colliders))
    {
-      auto& collider = colliders[collider_index];
       const auto is_sphere = std::holds_alternative<tinysph::Sphere>(collider._shape);
       const auto label = std::string{is_sphere ? "sphere " : "box "} + std::to_string(collider_index);
       auto changed = false;
@@ -223,8 +227,9 @@ void drawCollidersSection(tinysph::World& world, SandboxState& state)
    }
    if (remove_index.has_value())
    {
-      world.removeCollider(colliders[*remove_index]._id);
-      colliders.erase(colliders.begin() + static_cast<std::ptrdiff_t>(*remove_index));
+      const auto removed = colliders.begin() + *remove_index;
+      world.removeCollider(removed->_id);
+      colliders.erase(removed);
    }
 }
 
@@ -253,10 +258,9 @@ void drawForceFieldsSection(tinysph::World& world, SandboxState& state)
       add_field(tinysph::Wind{state._scene._domain, {3.0f, 0.0f, 0.0f}});
    }
 
-   std::optional<std::size_t> remove_index;
-   for (std::size_t field_index = 0; field_index < fields.size(); ++field_index)
+   std::optional<std::ptrdiff_t> remove_index;
+   for (auto&& [field_index, field] : std::views::enumerate(fields))
    {
-      auto& field = fields[field_index];
       const auto type_name = std::visit(
          Overloaded{
             [](const tinysph::Attractor&) { return "attractor "; },
@@ -312,8 +316,9 @@ void drawForceFieldsSection(tinysph::World& world, SandboxState& state)
    }
    if (remove_index.has_value())
    {
-      world.removeForceField(fields[*remove_index]._id);
-      fields.erase(fields.begin() + static_cast<std::ptrdiff_t>(*remove_index));
+      const auto removed = fields.begin() + *remove_index;
+      world.removeForceField(removed->_id);
+      fields.erase(removed);
    }
 }
 
@@ -332,10 +337,9 @@ void drawEmittersSection(tinysph::World& world, SandboxState& state)
       emitters.push_back({emitter, world.addEmitter(emitter)});
    }
 
-   std::optional<std::size_t> remove_index;
-   for (std::size_t emitter_index = 0; emitter_index < emitters.size(); ++emitter_index)
+   std::optional<std::ptrdiff_t> remove_index;
+   for (auto&& [emitter_index, emitter] : std::views::enumerate(emitters))
    {
-      auto& emitter = emitters[emitter_index];
       auto changed = false;
       const auto remove_requested = listEntry(
          "emitter " + std::to_string(emitter_index),
@@ -361,8 +365,9 @@ void drawEmittersSection(tinysph::World& world, SandboxState& state)
    }
    if (remove_index.has_value())
    {
-      world.removeEmitter(emitters[*remove_index]._id);
-      emitters.erase(emitters.begin() + static_cast<std::ptrdiff_t>(*remove_index));
+      const auto removed = emitters.begin() + *remove_index;
+      world.removeEmitter(removed->_id);
+      emitters.erase(removed);
    }
 }
 
@@ -374,12 +379,12 @@ void drawInteractionSection(SandboxState& state)
    }
 
    auto& tool = state._mouse_tool;
-   auto mode = static_cast<int32_t>(tool._mode);
-   ImGui::RadioButton("off", &mode, static_cast<int32_t>(MouseToolMode::Off));
+   auto mode = std::to_underlying(tool._mode);
+   ImGui::RadioButton("off", &mode, std::to_underlying(MouseToolMode::Off));
    ImGui::SameLine();
-   ImGui::RadioButton("pull", &mode, static_cast<int32_t>(MouseToolMode::Pull));
+   ImGui::RadioButton("pull", &mode, std::to_underlying(MouseToolMode::Pull));
    ImGui::SameLine();
-   ImGui::RadioButton("push", &mode, static_cast<int32_t>(MouseToolMode::Push));
+   ImGui::RadioButton("push", &mode, std::to_underlying(MouseToolMode::Push));
    tool._mode = static_cast<MouseToolMode>(mode);
    ImGui::SliderFloat("strength##tool", &tool._strength, 1.0f, 300.0f, "%.0f m/s^2", ImGuiSliderFlags_Logarithmic);
    ImGui::SliderFloat("radius##tool", &tool._radius, 0.03f, 0.5f, "%.2f m");
@@ -394,16 +399,16 @@ void drawRenderSection(SandboxState& state)
    }
 
    auto& render_settings = state._render_settings;
-   auto render_mode = static_cast<int32_t>(render_settings._render_mode);
-   ImGui::RadioButton("spheres", &render_mode, static_cast<int32_t>(RenderMode::Spheres));
+   auto render_mode = std::to_underlying(render_settings._render_mode);
+   ImGui::RadioButton("spheres", &render_mode, std::to_underlying(RenderMode::Spheres));
    ImGui::SameLine();
-   ImGui::RadioButton("fluid surface", &render_mode, static_cast<int32_t>(RenderMode::FluidSurface));
+   ImGui::RadioButton("fluid surface", &render_mode, std::to_underlying(RenderMode::FluidSurface));
    ImGui::SetItemTooltip("smoothed hull around the particles with reflection and refraction (screen space fluid)");
    render_settings._render_mode = static_cast<RenderMode>(render_mode);
 
    if (render_settings._render_mode == RenderMode::Spheres)
    {
-      auto color_mode = static_cast<int32_t>(render_settings._color_mode);
+      auto color_mode = std::to_underlying(render_settings._color_mode);
       ImGui::Combo("color", &color_mode, "speed\0density\0flat\0");
       render_settings._color_mode = static_cast<ColorMode>(color_mode);
       ImGui::SliderFloat("speed range", &render_settings._speed_range, 0.5f, 10.0f, "%.1f m/s");

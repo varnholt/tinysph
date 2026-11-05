@@ -6,6 +6,7 @@ the fluid as a surface with reflection and refraction, and lets you poke the wat
 
 ```cpp
 #include <tinysph/tinysph.h>
+using namespace std::chrono_literals;
 
 tinysph::World world{{._domain = {{0, 0, 0}, {1.6f, 1, 0.6f}}}};
 world.addFluid(tinysph::Box{._center = {0.25f, 0.3f, 0.3f}, ._half_extents = {0.23f, 0.28f, 0.28f}});
@@ -13,8 +14,21 @@ world.addCollider(tinysph::Sphere{._center = {1.1f, 0.12f, 0.3f}, ._radius = 0.1
 
 while (running)
 {
-   world.step(1.0f / 60.0f);
-   draw(world.positions());  // std::span<const tinysph::Vec3>
+   world.step(16ms);           // any std::chrono duration
+   draw(world.positions());    // std::span<const tinysph::Vec3>
+}
+```
+
+Settings that come from user input can be checked instead of trusted:
+
+```cpp
+if (auto world = tinysph::World::create(settings))
+{
+   run(*world);
+}
+else
+{
+   std::println("invalid settings: {}", tinysph::describe(world.error()));
 }
 ```
 
@@ -54,7 +68,7 @@ Everything public lives in `include/tinysph/`:
 |--------|----------|
 | `tinysph.h` | includes everything below |
 | `world.h` | `World`: the simulation. Particles, colliders, force fields, emitters, `step()` |
-| `types.h` | shapes (`Sphere`, `Box`), force fields (`Attractor`, `Vortex`, `Wind`), `Emitter`, handles, `WorldSettings`, `FluidParameters`, `StepStatistics` |
+| `types.h` | shapes (`Sphere`, `Box`), force fields (`Attractor`, `Vortex`, `Wind`), `Emitter`, handles, `WorldSettings`, `FluidParameters`, `SettingsError`, `StepStatistics`, `Seconds` |
 | `math.h` | `Vec3`, `Aabb` |
 | `version.h` | `tinysph::version` |
 
@@ -63,6 +77,8 @@ Design rules that keep it stable:
 - `World` hides its implementation behind a pointer, so the solver, its data layout and future backends (GPU) can change without breaking your code.
 - Colliders, force fields and emitters are referred to by typed handles (`ColliderId`, ...). A handle never points to a different object after removal; ids are not reused.
 - `WorldSettings` is fixed per world (resolution, rest density, backend); `FluidParameters` can be changed at any time.
+- Time is a `std::chrono` duration, so `step(16)` (seconds or milliseconds?) does not compile; `step(16ms)` does.
+- Invalid settings are reported through `std::expected` by `World::create()`; the constructor throws `std::invalid_argument` (or terminates without exceptions).
 - Semantic versioning. Until 1.0 the API may still change between minor versions; from 1.0 on, only with a new major version.
 
 ## Build

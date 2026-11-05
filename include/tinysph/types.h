@@ -1,13 +1,21 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <variant>
 
 #include "tinysph/math.h"
 
 namespace tinysph
 {
+
+/// \brief simulated time. any std::chrono duration converts implicitly, e.g. world.step(16ms) or world.step(1s / 60.0).
+using Seconds = std::chrono::duration<float>;
+
+/// \brief wall clock time spent computing.
+using Milliseconds = std::chrono::duration<double, std::milli>;
 
 // ----------------------------------------------------------------------------------------------------
 // shapes, used for fluid volumes and colliders
@@ -113,24 +121,58 @@ struct FluidParameters
    Vec3 _gravity{0.0f, -9.81f, 0.0f};
    float _speed_of_sound{30.0f};  //!< stiffness of the equation of state p = c^2 (rho - rho0); higher = less compressible, smaller steps
    float _viscosity{0.2f};        //!< dynamic viscosity mu in Pa s
-   float _artificial_viscosity{0.05f};   //!< monaghan alpha; damps approaching particle pairs; at 0 the fluid never settles
-   bool _clamp_negative_pressure{true};  //!< avoids particles clumping at the free surface
-   float _wall_restitution{0.0f};        //!< 0 = walls absorb the normal velocity, 1 = perfect bounce
-   float _wall_friction{0.02f};          //!< fraction of the tangential velocity removed per contact
-   float _max_time_step{1.0f / 400.0f};  //!< upper bound for the adaptive time step in s
-   float _cfl_number{0.4f};              //!< dt <= cfl * h / (c + max speed)
+   float _artificial_viscosity{0.05f};     //!< monaghan alpha; damps approaching particle pairs; at 0 the fluid never settles
+   bool _clamp_negative_pressure{true};    //!< avoids particles clumping at the free surface
+   float _wall_restitution{0.0f};          //!< 0 = walls absorb the normal velocity, 1 = perfect bounce
+   float _wall_friction{0.02f};            //!< fraction of the tangential velocity removed per contact
+   Seconds _max_time_step{1.0f / 400.0f};  //!< upper bound for the adaptive time step
+   float _cfl_number{0.4f};                //!< dt <= cfl * h / (c + max speed)
 };
+
+/// \brief why WorldSettings were rejected.
+enum class SettingsError : int32_t
+{
+   NonPositiveSpacing,      //!< _particle_spacing must be > 0
+   NonPositiveRestDensity,  //!< _rest_density must be > 0
+   SupportRadiusTooSmall,   //!< _support_radius_factor must be >= 1, otherwise particles have no neighbors
+   EmptyDomain,             //!< _domain must be at least a few particles wide on every axis
+   TooManyGridCells,        //!< the domain is too large for the spacing
+   ZeroParticleCap,         //!< _max_particles must be > 0
+   UnsupportedBackend,      //!< the requested backend is not built in
+};
+
+[[nodiscard]] constexpr std::string_view describe(SettingsError error)
+{
+   switch (error)
+   {
+      case SettingsError::NonPositiveSpacing:
+         return "particle spacing must be greater than zero";
+      case SettingsError::NonPositiveRestDensity:
+         return "rest density must be greater than zero";
+      case SettingsError::SupportRadiusTooSmall:
+         return "support radius factor must be at least 1";
+      case SettingsError::EmptyDomain:
+         return "domain must be at least four particle spacings wide on every axis";
+      case SettingsError::TooManyGridCells:
+         return "domain is too large for the particle spacing";
+      case SettingsError::ZeroParticleCap:
+         return "particle cap must be greater than zero";
+      case SettingsError::UnsupportedBackend:
+         return "backend is not available in this build";
+   }
+   return "unknown error";
+}
 
 /// \brief what happened during the last World::step() call.
 struct StepStatistics
 {
-   float _time_step{0.0f};  //!< dt of the last substep in s
+   Seconds _time_step{};  //!< dt of the last substep
    int32_t _substeps{0};
-   float _simulated_time{0.0f};         //!< sum of all substep dts in s; less than requested when max_substeps was hit
+   Seconds _simulated_time{};           //!< sum of all substeps; less than requested when max_substeps was hit
    float _max_density_ratio{0.0f};      //!< max rho / rho0
    float _average_density_ratio{0.0f};  //!< average rho / rho0
    float _max_speed{0.0f};              //!< in m/s
-   double _step_ms{0.0};                //!< wall clock time of the whole call
+   Milliseconds _wall_time{};           //!< time spent in the whole call
 };
 
 }  // namespace tinysph

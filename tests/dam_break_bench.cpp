@@ -10,6 +10,8 @@
 #include "test_scenes.h"
 #include "tinysph/tinysph.h"
 
+using namespace std::chrono_literals;
+
 int main(int argument_count, char** arguments)
 {
    tinysph::FluidParameters parameters;
@@ -44,9 +46,9 @@ int main(int argument_count, char** arguments)
    std::vector<float> sorted_densities;
    for (auto frame = 0; frame < frame_count; ++frame)
    {
-      const auto statistics = world.step(1.0f / 60.0f, 10000);
+      const auto statistics = world.step(1s / 60.0, 10000);
 
-      sorted_densities.assign(world.densities().begin(), world.densities().end());
+      sorted_densities.assign_range(world.densities());
       const auto p99_position = sorted_densities.begin() + static_cast<std::ptrdiff_t>(sorted_densities.size() * 99 / 100);
       std::ranges::nth_element(sorted_densities, p99_position);
       const auto p99_ratio = *p99_position / rest_density;
@@ -59,12 +61,12 @@ int main(int argument_count, char** arguments)
             "t {:5.2f}  substeps {:3}  dt {:.5f}  max {:.3f}  p99 {:.3f}  avg {:.3f}  vmax {:.2f}  {:.1f} ms",
             (frame + 1) / 60.0f,
             statistics._substeps,
-            statistics._time_step,
+            statistics._time_step.count(),
             statistics._max_density_ratio,
             p99_ratio,
             statistics._average_density_ratio,
             statistics._max_speed,
-            statistics._step_ms
+            statistics._wall_time.count()
          );
       }
    }

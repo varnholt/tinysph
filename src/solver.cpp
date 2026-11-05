@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <numeric>
 #include <ranges>
 #include <utility>
@@ -16,24 +17,38 @@ namespace tinysph::detail
 namespace
 {
 
+/// \brief integer lattice points of a box, as vectors in units of one spacing; x varies fastest.
+auto lattice(int32_t count_x, int32_t count_y, int32_t count_z, int32_t first = 0)
+{
+   return std::views::cartesian_product(
+             std::views::iota(first, first + count_z), std::views::iota(first, first + count_y), std::views::iota(first, first + count_x)
+          ) |
+          std::views::transform(
+             [](const auto& point)
+             {
+                const auto [z, y, x] = point;
+                return Vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+             }
+          );
+}
+
+/// \brief lattice points of the cube [-range, range]^3.
+auto centeredLattice(int32_t range)
+{
+   const auto count = 2 * range + 1;
+   return lattice(count, count, count, -range);
+}
+
 /// \brief sum of w_poly6 over a cubic lattice around one particle (self included).
 ///        dividing rho0 by this gives a mass for which a resting lattice has exactly the rest density.
 float latticeKernelSum(const Kernels& kernels, float spacing)
 {
    const auto range = static_cast<int32_t>(std::ceil(kernels.supportRadius() / spacing));
-   auto sum = 0.0f;
-   for (auto z = -range; z <= range; ++z)
-   {
-      for (auto y = -range; y <= range; ++y)
-      {
-         for (auto x = -range; x <= range; ++x)
-         {
-            const Vec3 offset{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
-            sum += kernels.poly6(lengthSquared(offset * spacing));
-         }
-      }
-   }
-   return sum;
+   return std::ranges::fold_left(
+      centeredLattice(range) | std::views::transform([&](const Vec3& offset) { return kernels.poly6(lengthSquared(offset * spacing)); }),
+      0.0f,
+      std::plus{}
+   );
 }
 
 /// \brief xorshift32; deterministic so tests and runs are reproducible.
@@ -108,19 +123,12 @@ std::size_t Solver::addFluidBox(const Aabb& box, const Vec3& velocity)
    const auto count_z = count_along(size.z);
    const auto first = box._min + Vec3{_particle_radius, _particle_radius, _particle_radius};
 
-   std::size_t added_count = 0;
-   for (auto z = 0; z < count_z; ++z)
+   auto added_count = 0uz;
+   for (const auto offset : lattice(count_x, count_y, count_z))
    {
-      for (auto y = 0; y < count_y; ++y)
+      if (addParticle(first + offset * spacing, velocity))
       {
-         for (auto x = 0; x < count_x; ++x)
-         {
-            const auto offset = Vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)} * spacing;
-            if (addParticle(first + offset, velocity))
-            {
-               ++added_count;
-            }
-         }
+         ++added_count;
       }
    }
    return added_count;
@@ -130,19 +138,13 @@ std::size_t Solver::addFluidSphere(const Vec3& center, float radius, const Vec3&
 {
    const auto spacing = _settings._particle_spacing;
    const auto steps = static_cast<int32_t>(std::floor(radius / spacing));
-   std::size_t added_count = 0;
-   for (auto z = -steps; z <= steps; ++z)
+   auto added_count = 0uz;
+   for (const auto lattice_offset : centeredLattice(steps))
    {
-      for (auto y = -steps; y <= steps; ++y)
+      const auto offset = lattice_offset * spacing;
+      if (lengthSquared(offset) <= radius * radius && addParticle(center + offset, velocity))
       {
-         for (auto x = -steps; x <= steps; ++x)
-         {
-            const auto offset = Vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)} * spacing;
-            if (lengthSquared(offset) <= radius * radius && addParticle(center + offset, velocity))
-            {
-               ++added_count;
-            }
-         }
+         ++added_count;
       }
    }
    return added_count;
@@ -206,8 +208,8 @@ StepStatistics Solver::advance(float frame_time, int32_t max_substeps)
       const auto time_step = std::min(computeTimeStep(), remaining_time);
       step(time_step);
       remaining_time -= time_step;
-      statistics._simulated_time += time_step;
-      statistics._time_step = time_step;
+      statistics._simulated_time += Seconds{time_step};
+      statistics._time_step = Seconds{time_step};
       ++statistics._substeps;
    }
 
@@ -221,7 +223,7 @@ StepStatistics Solver::advance(float frame_time, int32_t max_substeps)
    statistics._max_speed = maxSpeed();
 
    const auto elapsed = std::chrono::steady_clock::now() - start_time;
-   statistics._step_ms = std::chrono::duration<double, std::milli>(elapsed).count();
+   statistics._wall_time = std::chrono::duration_cast<Milliseconds>(elapsed);
    return statistics;
 }
 
@@ -240,7 +242,7 @@ void Solver::step(float time_step)
 float Solver::computeTimeStep() const
 {
    const auto support_radius = _kernels.supportRadius();
-   auto time_step = _parameters._max_time_step;
+   auto time_step = _parameters._max_time_step.count();
 
    // cfl condition: no information may travel further than a fraction of h per step
    time_step = std::min(time_step, _parameters._cfl_number * support_radius / (_parameters._speed_of_sound + maxSpeed()));
@@ -530,15 +532,13 @@ void Solver::emitLayer(const EmitterState& state)
    // the layer has already moved by the leftover distance since it was due
    const auto origin = emitter._position + direction * state._travelled;
    const auto steps = static_cast<int32_t>(std::floor(emitter._radius / spacing));
-   for (auto row = -steps; row <= steps; ++row)
+   const auto axis = std::views::iota(-steps, steps + 1);
+   for (const auto [row, column] : std::views::cartesian_product(axis, axis))
    {
-      for (auto column = -steps; column <= steps; ++column)
+      const auto offset = (tangent * static_cast<float>(column) + bitangent * static_cast<float>(row)) * spacing;
+      if (lengthSquared(offset) <= emitter._radius * emitter._radius)
       {
-         const auto offset = (tangent * static_cast<float>(column) + bitangent * static_cast<float>(row)) * spacing;
-         if (lengthSquared(offset) <= emitter._radius * emitter._radius)
-         {
-            addParticle(origin + offset, emitter._velocity);
-         }
+         addParticle(origin + offset, emitter._velocity);
       }
    }
 }

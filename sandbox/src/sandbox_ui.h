@@ -6,6 +6,9 @@
 #include "sandbox_scene.h"
 #include "tinysph/tinysph.h"
 
+/// \brief simulated time per rendered frame at time scale 1.
+inline constexpr tinysph::Seconds frame_time{1.0f / 60.0f};
+
 enum class MouseToolMode : int32_t
 {
    Off = 0,
@@ -43,7 +46,7 @@ struct SandboxState
    int32_t _max_substeps{40};  //!< per frame; when reached the simulation runs in slow motion
    int32_t _preset_index{0};
    tinysph::StepStatistics _statistics;
-   float _frame_ms{0.0f};
+   tinysph::Milliseconds _frame_time{};
    RenderSettings _render_settings;
    MouseTool _mouse_tool;
    FluidDraft _fluid_draft;
