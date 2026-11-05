@@ -91,6 +91,7 @@ private:
 
    void setupGrid();
    void computeDensities();
+   void computeNormals();
    void computeAccelerations();
    void integrate(float time_step);
    void resolveCollisions(Vec3& position, Vec3& velocity) const;
@@ -113,6 +114,7 @@ private:
    std::vector<Vec3> _accelerations;
    std::vector<float> _densities;
    std::vector<float> _pressures;
+   std::vector<Vec3> _normals;  //!< surface normals for the surface tension, only filled when it is on
 
    // uniform grid, rebuilt every substep
    Vec3 _grid_origin;

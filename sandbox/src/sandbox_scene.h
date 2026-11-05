@@ -37,6 +37,7 @@ struct SandboxScene
    std::string _name;
    tinysph::Aabb _domain{{0.0f, 0.0f, 0.0f}, {1.6f, 1.0f, 0.6f}};
    tinysph::Vec3 _gravity{0.0f, -9.81f, 0.0f};
+   float _surface_tension{0.0f};  //!< off by default, it costs about half again the solver time
    std::vector<SceneFluid> _fluids;
    std::vector<SceneCollider> _colliders;
    std::vector<SceneForceField> _fields;

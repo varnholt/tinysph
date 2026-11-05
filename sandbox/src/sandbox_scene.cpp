@@ -19,6 +19,7 @@ SandboxScene makeDropIntoPool()
 {
    SandboxScene scene;
    scene._name = "Drop into pool";
+   scene._surface_tension = 0.5f;
    scene._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.2f, 1.0f}};
    scene._fluids.push_back({tinysph::Box{{0.5f, 0.11f, 0.5f}, {0.48f, 0.09f, 0.48f}}, {}});
    scene._fluids.push_back({tinysph::Sphere{{0.5f, 0.75f, 0.5f}, 0.15f}, {0.0f, -1.0f, 0.0f}});
@@ -31,6 +32,7 @@ SandboxScene makeTwoBlobs()
    scene._name = "Two blobs (zero gravity)";
    scene._domain = {{0.0f, 0.0f, 0.0f}, {1.6f, 1.0f, 1.0f}};
    scene._gravity = {};
+   scene._surface_tension = 1.0f;
    scene._fluids.push_back({tinysph::Sphere{{0.45f, 0.5f, 0.5f}, 0.15f}, {1.0f, 0.0f, 0.0f}});
    scene._fluids.push_back({tinysph::Sphere{{1.15f, 0.55f, 0.5f}, 0.15f}, {-1.0f, 0.0f, 0.0f}});
    return scene;
@@ -40,6 +42,7 @@ SandboxScene makeFountain()
 {
    SandboxScene scene;
    scene._name = "Fountain";
+   scene._surface_tension = 0.5f;
    scene._domain = {{0.0f, 0.0f, 0.0f}, {1.2f, 1.0f, 1.2f}};
    scene._fluids.push_back({tinysph::Box{{0.6f, 0.06f, 0.6f}, {0.58f, 0.04f, 0.58f}}, {}});
    scene._colliders.push_back({tinysph::Box{{0.6f, 0.45f, 0.6f}, {0.15f, 0.02f, 0.15f}}});

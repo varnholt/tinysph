@@ -235,6 +235,10 @@ void Solver::step(float time_step)
    {
       rebuildGrid();
       computeDensities();
+      if (_parameters._surface_tension > 0.0f)
+      {
+         computeNormals();
+      }
       computeAccelerations();
       integrate(time_step);
    }
@@ -364,6 +368,34 @@ void Solver::computeDensities()
    );
 }
 
+void Solver::computeNormals()
+{
+   // akinci 2013: n_i = h sum_j m / rho_j grad W_ij. near zero inside the fluid, grows towards the surface;
+   // it is not normalized on purpose, its length also tells how close a particle is to the surface
+   const auto mass = _particle_mass;
+   const auto support_radius = _kernels.supportRadius();
+   _normals.resize(_positions.size());
+
+   parallelFor(
+      _positions.size(),
+      [&](std::size_t particle_index)
+      {
+         Vec3 normal;
+         forEachNeighbor(
+            particle_index,
+            [&](std::size_t neighbor_index, const Vec3& offset, float distance_squared)
+            {
+               if (neighbor_index != particle_index)
+               {
+                  normal += _kernels.spikyGradient(offset, std::sqrt(distance_squared)) * (mass / _densities[neighbor_index]);
+               }
+            }
+         );
+         _normals[particle_index] = normal * support_radius;
+      }
+   );
+}
+
 void Solver::computeAccelerations()
 {
    const auto mass = _particle_mass;
@@ -372,6 +404,8 @@ void Solver::computeAccelerations()
    const auto support_radius = _kernels.supportRadius();
    const auto artificial_viscosity_factor = _parameters._artificial_viscosity * _parameters._speed_of_sound * support_radius;
    const auto singularity_guard = 0.01f * support_radius * support_radius;
+   const auto surface_tension = _parameters._surface_tension;
+   const auto rest_density = _settings._rest_density;
 
    parallelFor(
       _positions.size(),
@@ -383,6 +417,7 @@ void Solver::computeAccelerations()
 
          Vec3 pressure_acceleration;
          Vec3 viscosity_acceleration;
+         Vec3 surface_acceleration;
          forEachNeighbor(
             particle_index,
             [&](std::size_t neighbor_index, const Vec3& offset, float distance_squared)
@@ -410,10 +445,20 @@ void Solver::computeAccelerations()
 
                viscosity_acceleration +=
                   (_velocities[neighbor_index] - velocity) * (mass * _kernels.viscosityLaplacian(distance) / (density * neighbor_density));
+
+               // akinci 2013 surface tension: cohesion pulls neighbors together, the curvature term flattens the
+               // surface; the correction amplifies both where neighbors are missing, i.e. at the surface
+               if (surface_tension > 0.0f && distance > 1e-9f)
+               {
+                  const auto correction = 2.0f * rest_density / (density + neighbor_density);
+                  const auto cohesion = offset * (mass * _kernels.cohesion(distance) / distance);
+                  const auto curvature = _normals[particle_index] - _normals[neighbor_index];
+                  surface_acceleration -= (cohesion + curvature) * correction;
+               }
             }
          );
 
-         auto acceleration = pressure_acceleration + viscosity_acceleration * viscosity + gravity;
+         auto acceleration = pressure_acceleration + viscosity_acceleration * viscosity + surface_acceleration * surface_tension + gravity;
          const auto& position = _positions[particle_index];
          for (const auto& field : _fields)
          {
