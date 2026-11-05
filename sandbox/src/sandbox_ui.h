@@ -21,7 +21,13 @@ struct MouseTool
 {
    MouseToolMode _mode{MouseToolMode::Pull};
    float _strength{60.0f};  //!< acceleration at the center in m/s^2
-   float _radius{0.15f};    //!< in m
+#if defined(__EMSCRIPTEN__)
+   // scaled with the coarser browser spacing (0.15 * 0.045 / 0.025), so the tool grabs as many particles as on the
+   // desktop; a ball of only ~60 particles cannot hold its shape against the attractor and jitters 3-4x as much
+   float _radius{0.27f};  //!< in m
+#else
+   float _radius{0.15f};  //!< in m
+#endif
 };
 
 /// \brief editable values for the "add fluid" panel.
