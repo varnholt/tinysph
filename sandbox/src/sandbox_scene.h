@@ -45,7 +45,9 @@ struct SandboxScene
 };
 
 /// \brief creates a world for the scene, fills the fluids and stores the new handles in the scene.
-[[nodiscard]] tinysph::World buildWorld(SandboxScene& scene, float particle_spacing, const tinysph::FluidParameters& parameters);
+///        falls back to the cpu and resets 'backend' when the gpu backend is not available.
+[[nodiscard]] tinysph::World
+buildWorld(SandboxScene& scene, float particle_spacing, tinysph::Backend& backend, const tinysph::FluidParameters& parameters);
 
 [[nodiscard]] int32_t presetCount();
 [[nodiscard]] const char* presetName(int32_t preset_index);

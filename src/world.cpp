@@ -10,6 +10,10 @@
 #include "geometry.h"
 #include "solver.h"
 
+#if defined(TINYSPH_HAS_GPU)
+#include "gpu/gpu_solver.h"
+#endif
+
 namespace tinysph
 {
 
@@ -61,7 +65,12 @@ constexpr double max_grid_cells = 128.0 * 1024.0 * 1024.0;
 [[noreturn]] void rejectSettings(SettingsError error)
 {
 #if defined(__cpp_exceptions)
-   throw std::invalid_argument{std::string{"tinysph::World: "} + std::string{describe(error)}};
+   const auto message = std::string{"tinysph::World: "} + std::string{describe(error)};
+   if (error == SettingsError::GpuUnavailable)
+   {
+      throw std::runtime_error{message};
+   }
+   throw std::invalid_argument{message};
 #else
    std::abort();
 #endif
@@ -96,7 +105,50 @@ struct World::Impl
       return Slots{_emitter_ids, _solver.emitters()};
    }
 
+   /// rief a world for valid settings; fails if the gpu backend finds no usable gpu.
+   [[nodiscard]] static std::expected<std::unique_ptr<Impl>, SettingsError>
+   create(const WorldSettings& settings, const FluidParameters& parameters)
+   {
+      auto impl = std::make_unique<Impl>(settings, parameters);
+#if defined(TINYSPH_HAS_GPU)
+      if (settings._backend == Backend::Gpu)
+      {
+         impl->_gpu = detail::GpuSolver::create(impl->_solver);
+         if (!impl->_gpu)
+         {
+            return std::unexpected{SettingsError::GpuUnavailable};
+         }
+      }
+#endif
+      return impl;
+   }
+
+   [[nodiscard]] StepStatistics step(float time, int32_t max_substeps)
+   {
+#if defined(TINYSPH_HAS_GPU)
+      if (_gpu)
+      {
+         return _gpu->advance(time, max_substeps);
+      }
+#endif
+      return _solver.advance(time, max_substeps);
+   }
+
+   [[nodiscard]] std::string_view deviceDescription() const
+   {
+#if defined(TINYSPH_HAS_GPU)
+      if (_gpu)
+      {
+         return _gpu->deviceDescription();
+      }
+#endif
+      return "cpu";
+   }
+
    detail::Solver _solver;
+#if defined(TINYSPH_HAS_GPU)
+   std::unique_ptr<detail::GpuSolver> _gpu;  //!< runs the substeps when the backend is Backend::Gpu; holds a reference to _solver
+#endif
    std::vector<ColliderId> _collider_ids;       //!< parallel to _solver.colliders()
    std::vector<ForceFieldId> _force_field_ids;  //!< parallel to _solver.fields()
    std::vector<EmitterId> _emitter_ids;         //!< parallel to _solver.emitters()
@@ -122,9 +174,18 @@ std::expected<void, SettingsError> World::validate(const WorldSettings& settings
    {
       return std::unexpected{SettingsError::ZeroParticleCap};
    }
-   if (settings._backend != Backend::Cpu)
+   switch (settings._backend)
    {
-      return std::unexpected{SettingsError::UnsupportedBackend};
+      case Backend::Cpu:
+         break;
+      case Backend::Gpu:
+#if !defined(TINYSPH_HAS_GPU)
+         return std::unexpected{SettingsError::UnsupportedBackend};
+#else
+         break;
+#endif
+      default:
+         return std::unexpected{SettingsError::UnsupportedBackend};
    }
 
    const auto size = settings._domain.size();
@@ -146,20 +207,26 @@ std::expected<void, SettingsError> World::validate(const WorldSettings& settings
 
 std::expected<World, SettingsError> World::create(const WorldSettings& settings, const FluidParameters& parameters)
 {
-   return validate(settings).transform([&]() { return World{settings, parameters}; });
+   return validate(settings).and_then([&]() { return Impl::create(settings, parameters); }
+   ).transform([](std::unique_ptr<Impl> impl) { return World{std::move(impl)}; });
 }
 
 World::World(const WorldSettings& settings, const FluidParameters& parameters)
     : _impl(
          [&]()
          {
-            if (const auto valid = validate(settings); !valid)
+            auto impl = validate(settings).and_then([&]() { return Impl::create(settings, parameters); });
+            if (!impl)
             {
-               rejectSettings(valid.error());
+               rejectSettings(impl.error());
             }
-            return std::make_unique<Impl>(settings, parameters);
+            return std::move(*impl);
          }()
       )
+{
+}
+
+World::World(std::unique_ptr<Impl> impl) : _impl(std::move(impl))
 {
 }
 
@@ -170,6 +237,11 @@ World& World::operator=(World&& other) noexcept = default;
 const WorldSettings& World::settings() const
 {
    return _impl->_solver.settings();
+}
+
+std::string_view World::deviceDescription() const
+{
+   return _impl->deviceDescription();
 }
 
 const FluidParameters& World::parameters() const
@@ -325,7 +397,7 @@ std::optional<Emitter> World::emitter(EmitterId id) const
 
 StepStatistics World::step(Seconds time, int32_t max_substeps)
 {
-   return _impl->_solver.advance(time.count(), max_substeps);
+   return _impl->step(time.count(), max_substeps);
 }
 
 }  // namespace tinysph

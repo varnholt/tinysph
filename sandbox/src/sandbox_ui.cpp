@@ -86,6 +86,16 @@ void drawSimulationSection(tinysph::World& world, SandboxState& state)
       state._rebuild_requested = true;
    }
 
+   // switching rebuilds the world; without a usable gpu buildWorld() falls back to the cpu
+   auto use_gpu = state._backend == tinysph::Backend::Gpu;
+   if (ImGui::Checkbox("gpu", &use_gpu))
+   {
+      state._backend = use_gpu ? tinysph::Backend::Gpu : tinysph::Backend::Cpu;
+      state._rebuild_requested = true;
+   }
+   ImGui::SameLine();
+   ImGui::TextDisabled("%.*s", static_cast<int>(world.deviceDescription().size()), world.deviceDescription().data());
+
    ImGui::SliderFloat("time scale", &state._time_scale, 0.05f, 2.0f, "%.2fx");
    ImGui::SliderInt("max substeps / frame", &state._max_substeps, 1, 200);
 

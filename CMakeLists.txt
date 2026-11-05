@@ -14,6 +14,10 @@ option(TINYSPH_BUILD_SANDBOX "Build the interactive sandbox (SDL3 + OpenGL + Dea
 option(TINYSPH_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
 option(TINYSPH_BUILD_EXAMPLES "Build the examples" ${PROJECT_IS_TOP_LEVEL})
 option(TINYSPH_INSTALL "Generate install and package config rules" ${PROJECT_IS_TOP_LEVEL})
+option(
+    TINYSPH_GPU
+    "Build the gpu backend (WebGPU compute through a prebuilt wgpu-native, downloaded at configure time)"
+    OFF)
 set(TINYSPH_USES_TBB OFF)
 
 # warnings for our own targets only, never forced onto consumers
@@ -71,6 +75,23 @@ if(NOT MSVC)
 endif()
 
 # ----------------------------------------------------------------------------------------------------
+# gpu backend
+# ----------------------------------------------------------------------------------------------------
+
+if(TINYSPH_GPU)
+    include(cmake/wgpu_native.cmake)
+    target_sources(tinysph PRIVATE src/gpu/gpu_solver.cpp src/gpu/gpu_solver.h src/gpu/shaders.h)
+    target_compile_definitions(tinysph PRIVATE TINYSPH_HAS_GPU=1)
+    target_include_directories(tinysph PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(tinysph PRIVATE tinysph::wgpu_native)
+else()
+    # an empty function, so the subdirectories can call it either way
+    function(tinysph_copy_runtime_dlls target)
+
+    endfunction()
+endif()
+
+# ----------------------------------------------------------------------------------------------------
 # install, so consumers can use find_package(tinysph)
 # ----------------------------------------------------------------------------------------------------
 
@@ -84,6 +105,19 @@ if(TINYSPH_INSTALL)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(DIRECTORY include/tinysph DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+    # the installed config recreates tinysph::wgpu_native from these files
+    if(TINYSPH_GPU)
+        if(WIN32)
+            set(TINYSPH_WGPU_RUNTIME_DESTINATION ${CMAKE_INSTALL_BINDIR})
+            install(FILES ${wgpu_native_SOURCE_DIR}/lib/${TINYSPH_WGPU_IMPLIB_NAME}
+                    DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        else()
+            set(TINYSPH_WGPU_RUNTIME_DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        endif()
+        install(FILES ${wgpu_native_SOURCE_DIR}/lib/${TINYSPH_WGPU_RUNTIME_NAME}
+                DESTINATION ${TINYSPH_WGPU_RUNTIME_DESTINATION})
+    endif()
     install(
         EXPORT tinysphTargets
         NAMESPACE tinysph::

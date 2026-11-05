@@ -5,5 +5,21 @@ if(@TINYSPH_USES_TBB@)
     find_dependency(TBB)
 endif()
 
+# built with the gpu backend: the static library links against the bundled wgpu-native
+if(@TINYSPH_GPU@ AND NOT TARGET tinysph::wgpu_native)
+    add_library(tinysph::wgpu_native SHARED IMPORTED)
+    set_target_properties(
+        tinysph::wgpu_native
+        PROPERTIES IMPORTED_LOCATION
+                   "${PACKAGE_PREFIX_DIR}/@TINYSPH_WGPU_RUNTIME_DESTINATION@/@TINYSPH_WGPU_RUNTIME_NAME@")
+    if(WIN32)
+        set_target_properties(
+            tinysph::wgpu_native PROPERTIES IMPORTED_IMPLIB
+                                            "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/@TINYSPH_WGPU_IMPLIB_NAME@")
+    elseif(NOT APPLE)
+        set_target_properties(tinysph::wgpu_native PROPERTIES IMPORTED_NO_SONAME TRUE)
+    endif()
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/tinysphTargets.cmake")
 check_required_components(tinysph)

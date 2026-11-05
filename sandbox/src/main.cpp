@@ -125,7 +125,7 @@ int main(int argument_count, char** arguments)
 
    SandboxState state;
    // --preset <index> starts with another scene, --spheres with sphere rendering, --zoom <wheel steps> moves the camera in, --tilt
-   // <radians> changes its pitch
+   // <radians> changes its pitch, --gpu simulates on the gpu
    const std::span<char*> argument_list{arguments, static_cast<std::size_t>(argument_count)};
    auto zoom_steps = 0.0f;
    auto tilt = 0.0f;  //!< added to the camera pitch in radians, negative looks flatter
@@ -156,9 +156,15 @@ int main(int argument_count, char** arguments)
    {
       state._render_settings._render_mode = RenderMode::MeshSurface;
    }
+   if (std::ranges::contains(
+          argument_list | std::views::transform([](const char* argument) { return std::string_view{argument}; }), "--gpu"
+       ))
+   {
+      state._backend = tinysph::Backend::Gpu;
+   }
    loadPreset(state, state._preset_index);
    state._rebuild_requested = false;
-   auto world = buildWorld(state._scene, state._particle_spacing, state._parameters);
+   auto world = buildWorld(state._scene, state._particle_spacing, state._backend, state._parameters);
 
    OrbitCamera camera;
    camera.frame(state._scene._domain);
@@ -227,7 +233,7 @@ int main(int argument_count, char** arguments)
       if (state._rebuild_requested)
       {
          state._rebuild_requested = false;
-         world = buildWorld(state._scene, state._particle_spacing, state._parameters);
+         world = buildWorld(state._scene, state._particle_spacing, state._backend, state._parameters);
          mouse_field_id.reset();
       }
       if (state._reframe_requested)
