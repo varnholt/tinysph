@@ -71,14 +71,17 @@ struct Mat4
    {
       Mat4 result;
       const auto indices = std::views::iota(0uz, 4uz);
-      for (const auto [column, row] : std::views::cartesian_product(indices, indices))
+      for (const auto column : indices)
       {
-         auto sum = 0.0f;
-         for (const auto inner : indices)
+         for (const auto row : indices)
          {
-            sum += lhs[inner, row] * rhs[column, inner];
+            auto sum = 0.0f;
+            for (const auto inner : indices)
+            {
+               sum += lhs[inner, row] * rhs[column, inner];
+            }
+            result[column, row] = sum;
          }
-         result[column, row] = sum;
       }
       return result;
    }

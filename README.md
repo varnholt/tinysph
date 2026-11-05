@@ -6,6 +6,8 @@ A tiny C++23 library for smoothed particle hydrodynamics (SPH): fluid volumes, c
 behind one small API, with no dependencies beyond the standard library. Comes with an interactive sandbox that renders
 the fluid as a surface with reflection and refraction, and lets you poke the water with the mouse.
 
+**[Try the sandbox in your browser](https://varnholt.github.io/tinysph/)**: no install, WebAssembly and WebGL 2.
+
 | | |
 |---|---|
 | ![dam break](docs/images/dam_break.png) | ![drop into pool](docs/images/drop_into_pool.png) |
@@ -146,6 +148,19 @@ For now `World::step()` uploads the particles, runs all substeps on the GPU and 
 adaptive time step.
 
 In the sandbox, tick "gpu" in the simulation panel or start it with `--gpu`.
+
+## In the browser
+
+The sandbox also builds with Emscripten. CI publishes every push to `main` at
+[varnholt.github.io/tinysph](https://varnholt.github.io/tinysph/). The browser runs it on a single thread, so it starts
+with coarser particles (0.045 m spacing, about 1400 particles in the dam break); the spacing slider in the "Fluid"
+section goes finer.
+
+```
+emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release -DTINYSPH_BUILD_TESTS=OFF -DTINYSPH_BUILD_EXAMPLES=OFF
+cmake --build build-web --target tinysph_sandbox
+python -m http.server -d build-web/sandbox
+```
 
 ## Sandbox controls
 

@@ -1,0 +1,54 @@
+name: Web demo
+
+# builds the sandbox with emscripten; pushes to main publish it on github pages
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (Emscripten)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.10
+
+      - name: Configure
+        run: emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release -DTINYSPH_BUILD_TESTS=OFF -DTINYSPH_BUILD_EXAMPLES=OFF -DTINYSPH_INSTALL=OFF
+
+      - name: Build
+        run: cmake --build build-web --parallel --target tinysph_sandbox
+
+      - name: Collect the page
+        run: |
+          mkdir site
+          cp build-web/sandbox/index.html build-web/sandbox/index.js build-web/sandbox/index.wasm site/
+          ls -l site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

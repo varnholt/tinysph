@@ -4,7 +4,9 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#if __has_include(<execution>)
 #include <execution>
+#endif
 #include <numeric>
 #include <ranges>
 
@@ -141,13 +143,21 @@ constexpr std::array<std::array<std::size_t, 4>, 6> tetrahedra{{
    {0, 4, 5, 6},
 }};
 
-/// \brief runs function(index) for index in [0, count) on all cores
+/// \brief runs function(index) for index in [0, count) on all cores; a plain loop where the standard library has no
+///        parallel algorithms (emscripten, libc++)
 template <class Function>
 void forEachIndex(int32_t count, Function&& function)
 {
+#if defined(__cpp_lib_parallel_algorithm) && !defined(__EMSCRIPTEN__)
    const auto indices = std::views::iota(0, count);
    std::vector<int32_t> index_list(indices.begin(), indices.end());
    std::for_each(std::execution::par, index_list.begin(), index_list.end(), function);
+#else
+   for (auto index = 0; index < count; ++index)
+   {
+      function(index);
+   }
+#endif
 }
 
 }  // namespace

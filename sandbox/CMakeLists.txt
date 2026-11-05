@@ -50,7 +50,9 @@ target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
 # sandbox
 # ----------------------------------------------------------------------------------------------------
 
-find_package(OpenGL REQUIRED)
+if(NOT EMSCRIPTEN)
+    find_package(OpenGL REQUIRED)
+endif()
 
 add_executable(
     tinysph_sandbox
@@ -70,7 +72,27 @@ add_executable(
     src/surface_mesher.cpp
     src/surface_mesher.h)
 target_link_libraries(tinysph_sandbox PRIVATE tinysph::tinysph tinysph_warnings imgui
-                                              SDL3::SDL3-static OpenGL::GL)
+                                              SDL3::SDL3-static)
+
+if(EMSCRIPTEN)
+    # webgl 2 in a page that fills the browser window; the page is web/shell.html
+    set_target_properties(tinysph_sandbox PROPERTIES SUFFIX ".html" OUTPUT_NAME "index")
+    target_link_options(
+        tinysph_sandbox
+        PRIVATE
+        -sMIN_WEBGL_VERSION=2
+        -sMAX_WEBGL_VERSION=2
+        -sGL_ENABLE_GET_PROC_ADDRESS=1
+        -sALLOW_MEMORY_GROWTH=1
+        -sENVIRONMENT=web
+        "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
+    set_property(
+        TARGET tinysph_sandbox
+        APPEND
+        PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html)
+else()
+    target_link_libraries(tinysph_sandbox PRIVATE OpenGL::GL)
+endif()
 
 if(WIN32)
     set_target_properties(tinysph_sandbox PROPERTIES WIN32_EXECUTABLE ON)

@@ -36,8 +36,12 @@ struct FluidDraft
 struct SandboxState
 {
    SandboxScene _scene;
-   tinysph::FluidParameters _parameters;              //!< pushed to the world every frame
-   float _particle_spacing{0.025f};                   //!< applied when the world is rebuilt
+   tinysph::FluidParameters _parameters;  //!< pushed to the world every frame
+#if defined(__EMSCRIPTEN__)
+   float _particle_spacing{0.045f};  //!< applied when the world is rebuilt; coarser in the browser, which runs on one thread
+#else
+   float _particle_spacing{0.025f};  //!< applied when the world is rebuilt
+#endif
    tinysph::Backend _backend{tinysph::Backend::Cpu};  //!< applied when the world is rebuilt
 
    bool _running{true};
