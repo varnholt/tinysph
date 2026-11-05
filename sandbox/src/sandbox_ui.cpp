@@ -69,6 +69,14 @@ void drawSimulationSection(tinysph::World& world, SandboxState& state)
       return;
    }
 
+#if defined(__EMSCRIPTEN__)
+   ImGui::TextWrapped(
+      "Browser demo: one CPU thread and coarse particles, so it is much slower than the native build "
+      "(all cores or the GPU)."
+   );
+   ImGui::Spacing();
+#endif
+
    if (ImGui::Button(state._running ? "Pause (space)" : "Play (space)"))
    {
       state._running = !state._running;
