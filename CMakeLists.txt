@@ -22,6 +22,13 @@ if(MSVC)
     target_compile_options(tinysph_warnings INTERFACE /W4 /permissive- /utf-8)
 else()
     target_compile_options(tinysph_warnings INTERFACE -Wall -Wextra -Wpedantic)
+    # partially designated initializers like World{{._domain = ...}} are the intended way to use the
+    # settings structs
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL
+                                                 19)
+        target_compile_options(tinysph_warnings
+                               INTERFACE -Wno-missing-designated-field-initializers)
+    endif()
 endif()
 
 # ----------------------------------------------------------------------------------------------------
@@ -54,8 +61,8 @@ set_target_properties(
                SOVERSION ${PROJECT_VERSION_MAJOR}
                WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-# libstdc++ implements the parallel algorithms on top of tbb
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+# libstdc++ implements the parallel algorithms on top of tbb, for gcc and for clang alike
+if(NOT MSVC)
     find_package(TBB QUIET)
     if(TBB_FOUND)
         target_link_libraries(tinysph PRIVATE TBB::tbb)
