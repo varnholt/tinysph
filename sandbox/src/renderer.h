@@ -35,7 +35,7 @@ struct RenderSettings
 
    // fluid surface mode
    int32_t _smoothing_iterations{3};                        //!< bilateral filter passes; more = smoother hull
-   float _smoothing_radius{2.5f};                           //!< filter radius in particle radii
+   float _smoothing_radius{4.0f};                           //!< filter radius in particle radii
    float _refraction_strength{0.15f};                       //!< screen space offset per meter of thickness
    std::array<float, 3> _fluid_color{0.03f, 0.22f, 0.38f};  //!< color deep water scatters towards
    std::array<float, 3> _absorption{3.5f, 1.1f, 0.55f};     //!< beer-lambert coefficients per meter, red is absorbed first

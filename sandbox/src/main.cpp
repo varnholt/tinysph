@@ -102,13 +102,18 @@ int main(int argument_count, char** arguments)
    }
 
    SandboxState state;
-   // --preset <index> starts with another scene, --spheres with sphere rendering, e.g. for screenshots
+   // --preset <index> starts with another scene, --spheres with sphere rendering, --zoom <wheel steps> moves the camera in
    const std::span<char*> argument_list{arguments, static_cast<std::size_t>(argument_count)};
+   auto zoom_steps = 0.0f;
    for (const auto [argument, value] : std::views::zip(argument_list, argument_list | std::views::drop(1)))
    {
       if (std::string_view{argument} == "--preset")
       {
          state._preset_index = std::clamp(std::atoi(value), 0, presetCount() - 1);
+      }
+      if (std::string_view{argument} == "--zoom")
+      {
+         zoom_steps = static_cast<float>(std::atof(value));
       }
    }
    if (std::ranges::contains(
@@ -123,6 +128,7 @@ int main(int argument_count, char** arguments)
 
    OrbitCamera camera;
    camera.frame(state._scene._domain);
+   camera.zoom(zoom_steps);
 
    // the mouse tool is an ordinary force field that exists while the button is held
    std::optional<tinysph::ForceFieldId> mouse_field_id;

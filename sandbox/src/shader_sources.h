@@ -258,7 +258,11 @@ uniform float u_depth_falloff;     // depth difference in m at which samples sto
 
 out float out_depth;
 
-const int max_radius = 24;
+// a fixed number of taps with a variable step, so the filter reaches any radius at the same cost.
+// close to the camera a particle covers dozens of pixels; a filter capped at a few pixels left every particle
+// visible as a bump, which turned into noisy normals and blotchy refraction
+const int tap_count = 16;
+const float max_radius = 256.0;
 
 void main()
 {
@@ -269,22 +273,24 @@ void main()
       return;
    }
 
-   float radius = clamp(u_world_radius * u_pixels_per_meter / depth, 1.0, float(max_radius));
+   float radius = clamp(u_world_radius * u_pixels_per_meter / depth, 1.0, max_radius);
+   float step_size = max(1.0, radius / float(tap_count));
    float sigma = radius * 0.5;
    float sum = 0.0;
    float weight_sum = 0.0;
-   for (int offset = -max_radius; offset <= max_radius; ++offset)
+   for (int tap = -tap_count; tap <= tap_count; ++tap)
    {
-      if (abs(float(offset)) > radius)
+      float offset = float(tap) * step_size;
+      if (abs(offset) > radius)
       {
          continue;
       }
-      float sample_depth = texture(u_depth, v_uv + float(offset) * u_direction).r;
+      float sample_depth = texture(u_depth, v_uv + offset * u_direction).r;
       if (sample_depth <= 0.0)
       {
          continue;
       }
-      float spatial = exp(-float(offset * offset) / (2.0 * sigma * sigma));
+      float spatial = exp(-offset * offset / (2.0 * sigma * sigma));
       float difference = (sample_depth - depth) / u_depth_falloff;
       float range = exp(-difference * difference);
       sum += sample_depth * spatial * range;
