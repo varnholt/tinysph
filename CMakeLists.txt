@@ -9,7 +9,8 @@ include(GNUInstallDirs)
 
 # the sandbox, tests and examples are only built by default when tinysph is the top level project,
 # so pulling it in with FetchContent or add_subdirectory only builds the library
-option(TINYSPH_BUILD_SANDBOX "Build the interactive sandbox (SDL3 + OpenGL + Dear ImGui)" ${PROJECT_IS_TOP_LEVEL})
+option(TINYSPH_BUILD_SANDBOX "Build the interactive sandbox (SDL3 + OpenGL + Dear ImGui)"
+       ${PROJECT_IS_TOP_LEVEL})
 option(TINYSPH_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
 option(TINYSPH_BUILD_EXAMPLES "Build the examples" ${PROJECT_IS_TOP_LEVEL})
 option(TINYSPH_INSTALL "Generate install and package config rules" ${PROJECT_IS_TOP_LEVEL})
@@ -81,11 +82,13 @@ if(TINYSPH_INSTALL)
         NAMESPACE tinysph::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tinysph)
 
-    configure_package_config_file(cmake/tinysphConfig.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/tinysphConfig.cmake
-                                  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tinysph)
+    configure_package_config_file(
+        cmake/tinysphConfig.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/tinysphConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tinysph)
     write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/tinysphConfigVersion.cmake
                                      COMPATIBILITY SameMinorVersion)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/tinysphConfig.cmake ${CMAKE_CURRENT_BINARY_DIR}/tinysphConfigVersion.cmake
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/tinysphConfig.cmake
+                  ${CMAKE_CURRENT_BINARY_DIR}/tinysphConfigVersion.cmake
             DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tinysph)
 endif()
 

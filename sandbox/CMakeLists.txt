@@ -62,12 +62,13 @@ add_executable(
     src/matrix.h
     src/renderer.cpp
     src/renderer.h
-    src/sandbox_ui.cpp
     src/sandbox_scene.cpp
     src/sandbox_scene.h
+    src/sandbox_ui.cpp
     src/sandbox_ui.h
     src/shader_sources.h)
-target_link_libraries(tinysph_sandbox PRIVATE tinysph::tinysph tinysph_warnings imgui SDL3::SDL3-static OpenGL::GL)
+target_link_libraries(tinysph_sandbox PRIVATE tinysph::tinysph tinysph_warnings imgui
+                                              SDL3::SDL3-static OpenGL::GL)
 
 if(WIN32)
     set_target_properties(tinysph_sandbox PROPERTIES WIN32_EXECUTABLE ON)
