@@ -88,11 +88,19 @@ void drawSimulationSection(tinysph::World& world, SandboxState& state)
 
    // switching rebuilds the world; without a usable gpu buildWorld() falls back to the cpu
    auto use_gpu = state._backend == tinysph::Backend::Gpu;
+#if defined(__EMSCRIPTEN__)
+   // the gpu backend is wgpu-native, which does not run in the browser (yet)
+   ImGui::BeginDisabled();
+   ImGui::Checkbox("gpu", &use_gpu);
+   ImGui::EndDisabled();
+   ImGui::SetItemTooltip("not available in the browser yet");
+#else
    if (ImGui::Checkbox("gpu", &use_gpu))
    {
       state._backend = use_gpu ? tinysph::Backend::Gpu : tinysph::Backend::Cpu;
       state._rebuild_requested = true;
    }
+#endif
    ImGui::SameLine();
    ImGui::TextDisabled("%.*s", static_cast<int>(world.deviceDescription().size()), world.deviceDescription().data());
 
@@ -163,9 +171,9 @@ void drawFluidSection(tinysph::World& world, SandboxState& state)
    ImGui::SetItemTooltip("stiffness: higher = less compressible, but smaller time steps");
    ImGui::SliderFloat("viscosity", &parameters._viscosity, 0.0f, 5.0f, "%.3f Pa s", ImGuiSliderFlags_Logarithmic);
    ImGui::SliderFloat("artificial viscosity", &parameters._artificial_viscosity, 0.0f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
+   ImGui::SetItemTooltip("monaghan alpha: damps colliding particles only; at 0 the fluid keeps boiling");
    ImGui::SliderFloat("surface tension", &parameters._surface_tension, 0.0f, 5.0f, "%.2f");
    ImGui::SetItemTooltip("holds drops together and rounds them; costs about half again the solver time");
-   ImGui::SetItemTooltip("monaghan alpha: damps colliding particles only; at 0 the fluid keeps boiling");
    ImGui::Checkbox("clamp negative pressure", &parameters._clamp_negative_pressure);
    ImGui::SetItemTooltip("prevents particles from clumping at the free surface");
    ImGui::SliderFloat("wall restitution", &parameters._wall_restitution, 0.0f, 1.0f);

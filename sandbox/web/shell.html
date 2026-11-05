@@ -11,11 +11,13 @@
       #status { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
       #source { position: fixed; right: 12px; bottom: 10px; color: #8fb4d8; text-decoration: none; opacity: 0.8; }
       #source:hover { opacity: 1; text-decoration: underline; }
+      #note { position: fixed; left: 12px; bottom: 10px; opacity: 0.7; pointer-events: none; }
    </style>
 </head>
 <body>
    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
    <div id="status">loading the simulation...</div>
+   <div id="note">browser demo: one CPU thread, coarse particles - the native build is much faster</div>
    <a id="source" href="https://github.com/varnholt/tinysph" target="_blank" rel="noopener">tinysph on GitHub</a>
    <script>
       const status = document.getElementById("status");
