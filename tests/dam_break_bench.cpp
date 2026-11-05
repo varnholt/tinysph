@@ -48,7 +48,7 @@ int main(int argument_count, char** arguments)
    {
       const auto statistics = world.step(1s / 60.0, 10000);
 
-      sorted_densities.assign_range(world.densities());
+      sorted_densities.assign(world.densities().begin(), world.densities().end());
       const auto p99_position = sorted_densities.begin() + static_cast<std::ptrdiff_t>(sorted_densities.size() * 99 / 100);
       std::ranges::nth_element(sorted_densities, p99_position);
       const auto p99_ratio = *p99_position / rest_density;

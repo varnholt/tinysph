@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <numeric>
 #include <print>
 #include <ranges>
 #include <stdexcept>
@@ -28,7 +29,8 @@ bool isFinite(const tinysph::Vec3& value)
 
 float meanSpeed(const tinysph::World& world)
 {
-   const auto speed_sum = std::ranges::fold_left(world.velocities() | std::views::transform(tinysph::length), 0.0f, std::plus{});
+   const auto velocities = world.velocities();
+   const auto speed_sum = std::transform_reduce(velocities.begin(), velocities.end(), 0.0f, std::plus{}, tinysph::length);
    return speed_sum / static_cast<float>(world.particleCount());
 }
 
@@ -181,7 +183,7 @@ TEST_CASE("dam break stays stable and inside the domain")
       wall_time += statistics._wall_time;
 
       // single particles spike at impacts; the 99th percentile shows how compressible the bulk is
-      sorted_densities.assign_range(world.densities());
+      sorted_densities.assign(world.densities().begin(), world.densities().end());
       const auto p99_position = sorted_densities.begin() + static_cast<std::ptrdiff_t>(sorted_densities.size() * 99 / 100);
       std::ranges::nth_element(sorted_densities, p99_position);
       max_p99_density_ratio = std::max(max_p99_density_ratio, *p99_position / rest_density);
@@ -266,7 +268,10 @@ TEST_CASE("an attractor pulls fluid towards it")
    world.addForceField(tinysph::Attractor{{0.7f, 0.5f, 0.5f}, 30.0f, 0.6f});
    world.step(200ms);
 
-   const auto x_sum = std::ranges::fold_left(world.positions() | std::views::transform(&tinysph::Vec3::x), 0.0f, std::plus{});
+   const auto positions = world.positions();
+   const auto x_sum = std::transform_reduce(
+      positions.begin(), positions.end(), 0.0f, std::plus{}, [](const tinysph::Vec3& position) { return position.x; }
+   );
    const auto center_x = x_sum / static_cast<float>(world.particleCount());
    CHECK_MESSAGE(center_x > 0.35f, "fluid center moved to x = {:.3f}", center_x);
 }

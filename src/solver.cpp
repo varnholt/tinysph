@@ -18,15 +18,16 @@ namespace
 {
 
 /// \brief integer lattice points of a box, as vectors in units of one spacing; x varies fastest.
+///        built from iota + transform instead of views::cartesian_product, which libc++ (macos, emscripten) does not have.
 auto lattice(int32_t count_x, int32_t count_y, int32_t count_z, int32_t first = 0)
 {
-   return std::views::cartesian_product(
-             std::views::iota(first, first + count_z), std::views::iota(first, first + count_y), std::views::iota(first, first + count_x)
-          ) |
+   return std::views::iota(0, count_x * count_y * count_z) |
           std::views::transform(
-             [](const auto& point)
+             [=](int32_t index)
              {
-                const auto [z, y, x] = point;
+                const auto x = first + index % count_x;
+                const auto y = first + (index / count_x) % count_y;
+                const auto z = first + index / (count_x * count_y);
                 return Vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
              }
           );
@@ -44,11 +45,12 @@ auto centeredLattice(int32_t range)
 float latticeKernelSum(const Kernels& kernels, float spacing)
 {
    const auto range = static_cast<int32_t>(std::ceil(kernels.supportRadius() / spacing));
-   return std::ranges::fold_left(
-      centeredLattice(range) | std::views::transform([&](const Vec3& offset) { return kernels.poly6(lengthSquared(offset * spacing)); }),
-      0.0f,
-      std::plus{}
-   );
+   auto sum = 0.0f;
+   for (const auto offset : centeredLattice(range))
+   {
+      sum += kernels.poly6(lengthSquared(offset * spacing));
+   }
+   return sum;
 }
 
 /// \brief xorshift32; deterministic so tests and runs are reproducible.
@@ -63,7 +65,7 @@ float nextJitter(uint32_t& state)
 float maxLength(std::span<const Vec3> values)
 {
    const auto max_length_squared =
-      std::ranges::fold_left(values | std::views::transform(lengthSquared), 0.0f, [](float lhs, float rhs) { return std::max(lhs, rhs); });
+      std::transform_reduce(values.begin(), values.end(), 0.0f, [](float lhs, float rhs) { return std::max(lhs, rhs); }, lengthSquared);
    return std::sqrt(max_length_squared);
 }
 
@@ -532,10 +534,11 @@ void Solver::emitLayer(const EmitterState& state)
    // the layer has already moved by the leftover distance since it was due
    const auto origin = emitter._position + direction * state._travelled;
    const auto steps = static_cast<int32_t>(std::floor(emitter._radius / spacing));
-   const auto axis = std::views::iota(-steps, steps + 1);
-   for (const auto [row, column] : std::views::cartesian_product(axis, axis))
+   const auto count = 2 * steps + 1;
+   for (const auto point : lattice(count, count, 1, -steps))
    {
-      const auto offset = (tangent * static_cast<float>(column) + bitangent * static_cast<float>(row)) * spacing;
+      // a single layer: x and y span the disk, z is unused
+      const auto offset = (tangent * point.x + bitangent * point.y) * spacing;
       if (lengthSquared(offset) <= emitter._radius * emitter._radius)
       {
          addParticle(origin + offset, emitter._velocity);

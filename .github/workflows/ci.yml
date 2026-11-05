@@ -24,9 +24,9 @@ jobs:
           - name: Linux GCC 14
             os: ubuntu-24.04
             configure: -DCMAKE_CXX_COMPILER=g++-14
-          - name: Linux Clang 18
+          - name: Linux Clang 20
             os: ubuntu-24.04
-            configure: -DCMAKE_CXX_COMPILER=clang++-18
+            configure: -DCMAKE_CXX_COMPILER=clang++-20
           - name: macOS AppleClang
             os: macos-15
             configure: ""
@@ -37,6 +37,13 @@ jobs:
       - name: Install TBB (parallel algorithms for libstdc++)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libtbb-dev
+
+      # clang 18 cannot use libstdc++'s std::expected (needs __cpp_concepts 202002), clang 19+ can
+      - name: Install Clang 20
+        if: contains(matrix.configure, 'clang++-20')
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh 20
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTINYSPH_BUILD_SANDBOX=OFF ${{ matrix.configure }}
