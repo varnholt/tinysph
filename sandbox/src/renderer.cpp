@@ -4,7 +4,9 @@
 #include <cmath>
 #include <initializer_list>
 #include <numbers>
+#include <ranges>
 #include <string>
+#include <utility>
 #include <variant>
 
 #include <SDL3/SDL_log.h>
@@ -314,18 +316,16 @@ void Renderer::render(
 
    // the view matrix rotation maps world to view; its transpose maps view to world
    std::array<float, 9> view_to_world{};
-   for (auto column = 0; column < 3; ++column)
+   const auto axes = std::views::iota(0uz, 3uz);
+   for (const auto [column, row] : std::views::cartesian_product(axes, axes))
    {
-      for (auto row = 0; row < 3; ++row)
-      {
-         view_to_world[static_cast<std::size_t>(column * 3 + row)] = view.at(row, column);
-      }
+      view_to_world[column * 3 + row] = view[row, column];
    }
    const tinysph::Vec3 sun_world{0.3904f, 0.7807f, 0.4880f};
    const tinysph::Vec3 light_view{
-      view.at(0, 0) * sun_world.x + view.at(1, 0) * sun_world.y + view.at(2, 0) * sun_world.z,
-      view.at(0, 1) * sun_world.x + view.at(1, 1) * sun_world.y + view.at(2, 1) * sun_world.z,
-      view.at(0, 2) * sun_world.x + view.at(1, 2) * sun_world.y + view.at(2, 2) * sun_world.z,
+      view[0, 0] * sun_world.x + view[1, 0] * sun_world.y + view[2, 0] * sun_world.z,
+      view[0, 1] * sun_world.x + view[1, 1] * sun_world.y + view[2, 1] * sun_world.z,
+      view[0, 2] * sun_world.x + view[1, 2] * sun_world.y + view[2, 2] * sun_world.z,
    };
 
    uploadParticles(world, settings);
@@ -343,7 +343,7 @@ void Renderer::render(
       gl::UseProgram(program);
       setUniform(program, "u_view", view);
       setUniform(program, "u_projection", projection);
-      setUniform(program, "u_point_scale", projection.at(1, 1) * static_cast<float>(framebuffer_height));
+      setUniform(program, "u_point_scale", projection[1, 1] * static_cast<float>(framebuffer_height));
       setUniform(program, "u_radius", radius);
       gl::BindVertexArray(_particle_vertex_array);
    };
@@ -387,7 +387,7 @@ void Renderer::render(
       if (particle_count > 0)
       {
          set_particle_uniforms(_sphere_program, particle_radius * settings._radius_scale);
-         gl::Uniform1i(gl::GetUniformLocation(_sphere_program, "u_color_mode"), static_cast<int32_t>(settings._color_mode));
+         gl::Uniform1i(gl::GetUniformLocation(_sphere_program, "u_color_mode"), std::to_underlying(settings._color_mode));
          setUniform(_sphere_program, "u_light_view", light_view);
          glDrawArrays(GL_POINTS, 0, particle_count);
       }
@@ -422,7 +422,7 @@ void Renderer::render(
       // 4) bilateral smoothing, separable, ping pong; this turns the spheres into one hull
       gl::UseProgram(_fluid_smooth_program);
       setUniform(_fluid_smooth_program, "u_world_radius", particle_radius * settings._smoothing_radius);
-      setUniform(_fluid_smooth_program, "u_pixels_per_meter", projection.at(1, 1) * static_cast<float>(framebuffer_height) * 0.5f);
+      setUniform(_fluid_smooth_program, "u_pixels_per_meter", projection[1, 1] * static_cast<float>(framebuffer_height) * 0.5f);
       setUniform(_fluid_smooth_program, "u_depth_falloff", particle_radius * 2.0f);
       const auto texel_x = 1.0f / static_cast<float>(framebuffer_width);
       const auto texel_y = 1.0f / static_cast<float>(framebuffer_height);
@@ -499,24 +499,24 @@ void Renderer::uploadParticles(const tinysph::World& world, const RenderSettings
    const auto rest_density = world.settings()._rest_density;
 
    _particle_data.resize(positions.size() * 4);
-   for (std::size_t particle_index = 0; particle_index < positions.size(); ++particle_index)
+   for (const auto [particle_index, particle] : std::views::enumerate(std::views::zip(positions, velocities, densities)))
    {
+      const auto& [position, velocity, density] = particle;
       auto color_value = 0.0f;
       switch (settings._color_mode)
       {
          case ColorMode::Speed:
-            color_value = tinysph::length(velocities[particle_index]) / settings._speed_range;
+            color_value = tinysph::length(velocity) / settings._speed_range;
             break;
          case ColorMode::Density:
             // 0.9 rho0 -> 0, 1.1 rho0 -> 1
-            color_value = (densities[particle_index] / rest_density - 0.9f) * 5.0f;
+            color_value = (density / rest_density - 0.9f) * 5.0f;
             break;
          case ColorMode::Flat:
             break;
       }
 
-      const auto& position = positions[particle_index];
-      auto* target = &_particle_data[particle_index * 4];
+      auto* target = &_particle_data[static_cast<std::size_t>(particle_index) * 4];
       target[0] = position.x;
       target[1] = position.y;
       target[2] = position.z;

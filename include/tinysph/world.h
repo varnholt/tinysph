@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory>
 #include <optional>
 #include <span>
@@ -16,12 +17,13 @@ namespace tinysph
 ///
 /// typical use:
 /// \code
+///    using namespace std::chrono_literals;
 ///    tinysph::World world{{._domain = {{0, 0, 0}, {1, 1, 1}}}};
 ///    world.addFluid(tinysph::Box{{0.25f, 0.3f, 0.5f}, {0.2f, 0.25f, 0.45f}});
 ///    world.addCollider(tinysph::Sphere{{0.7f, 0.1f, 0.5f}, 0.1f});
 ///    while (running)
 ///    {
-///       world.step(1.0f / 60.0f);
+///       world.step(1s / 60.0);
 ///       draw(world.positions());
 ///    }
 /// \endcode
@@ -32,6 +34,15 @@ namespace tinysph
 class World
 {
 public:
+   /// \brief creates a world, or tells why the settings are invalid. use this when settings come from user input.
+   [[nodiscard]] static std::expected<World, SettingsError>
+   create(const WorldSettings& settings = {}, const FluidParameters& parameters = {});
+
+   /// \brief checks settings without creating a world.
+   [[nodiscard]] static std::expected<void, SettingsError> validate(const WorldSettings& settings);
+
+   /// \brief creates a world from settings that are known to be valid.
+   ///        invalid settings throw std::invalid_argument, or terminate when exceptions are disabled.
    explicit World(const WorldSettings& settings = {}, const FluidParameters& parameters = {});
    ~World();
    World(World&& other) noexcept;
@@ -102,7 +113,7 @@ public:
    /// \brief advances the simulation by the given time using adaptive substeps.
    ///        stops after max_substeps, so a slow machine runs in slow motion instead of freezing;
    ///        StepStatistics::_simulated_time tells how far it got.
-   StepStatistics step(float time, int32_t max_substeps = 1000);
+   StepStatistics step(Seconds time, int32_t max_substeps = 1000);
 
 private:
    struct Impl;

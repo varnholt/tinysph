@@ -1,9 +1,13 @@
 // the smallest useful tinysph program: break a dam, let it hit an obstacle, print what happens.
 
 #include <algorithm>
+#include <chrono>
 #include <print>
+#include <ranges>
 
 #include <tinysph/tinysph.h>
+
+using namespace std::chrono_literals;
 
 int main()
 {
@@ -20,15 +24,11 @@ int main()
 
    for (auto frame = 0; frame <= 120; ++frame)
    {
-      const auto statistics = world.step(1.0f / 60.0f);
+      const auto statistics = world.step(1s / 60.0);
       if (frame % 20 == 0)
       {
          // the front of the wave: the right most particle
-         auto front = 0.0f;
-         for (const auto& position : world.positions())
-         {
-            front = std::max(front, position.x);
-         }
+         const auto front = std::ranges::max(world.positions() | std::views::transform(&tinysph::Vec3::x));
          std::println(
             "t = {:.2f} s   wave front at x = {:.2f} m   max speed {:.2f} m/s   {} substeps",
             frame / 60.0f,
