@@ -510,8 +510,14 @@ void Solver::resolveCollisions(Vec3& position, Vec3& velocity) const
       const auto normal_speed = dot(velocity, normal);
       if (normal_speed < 0.0f)
       {
+         // coulomb friction: the tangential speed drops by at most mu times the normal speed change, so the braking
+         // follows how hard the particle hits the wall and not how often it is checked; independent of time step and
+         // resolution
          const auto tangential_velocity = velocity - normal * normal_speed;
-         velocity = tangential_velocity * (1.0f - friction) - normal * (normal_speed * restitution);
+         const auto tangential_speed = length(tangential_velocity);
+         const auto normal_speed_change = -normal_speed * (1.0f + restitution);
+         const auto keep = tangential_speed > 1e-9f ? std::max(0.0f, 1.0f - friction * normal_speed_change / tangential_speed) : 0.0f;
+         velocity = tangential_velocity * keep - normal * (normal_speed * restitution);
       }
    };
 
