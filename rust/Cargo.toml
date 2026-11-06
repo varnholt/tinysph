@@ -3,7 +3,7 @@ name = "tinysph"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Weakly compressible SPH fluid simulation: colliders, force fields, emitters, surface tension, adaptive time steps. Multithreaded on the CPU, no dependencies, no unsafe."
+description = "Weakly compressible SPH fluid simulation: colliders, force fields, emitters, surface tension, adaptive time steps. Multithreaded on the CPU, optional wgpu GPU backend, no dependencies by default, no unsafe."
 repository = "https://github.com/varnholt/tinysph"
 homepage = "https://github.com/varnholt/tinysph/tree/main/rust"
 documentation = "https://docs.rs/tinysph"
@@ -11,9 +11,16 @@ readme = "README.md"
 license = "MIT"
 keywords = ["sph", "fluid", "simulation", "physics", "gamedev"]
 categories = ["simulation", "game-development", "science"]
-include = ["src/**/*.rs", "README.md", "LICENSE"]
+include = ["src/**/*.rs", "build.rs", "shaders/*.wgsl", "README.md", "LICENSE"]
+
+[features]
+default = []
+## the wgpu compute backend, `Backend::Gpu`; native only (vulkan, metal, d3d12), needs rust 1.87
+gpu = ["dep:wgpu", "dep:pollster"]
 
 [dependencies]
+wgpu = { version = "30.0.1", optional = true, default-features = false, features = ["std", "parking_lot", "wgsl", "vulkan", "metal", "dx12"] }
+pollster = { version = "1.0.1", optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"

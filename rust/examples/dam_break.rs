@@ -1,17 +1,25 @@
 //! Runs the dam break scene headless and prints density and timing statistics.
 //!
-//! usage: cargo run --release --example dam_break -- [speed_of_sound] [viscosity] [seconds] [artificial_viscosity]
+//! usage: cargo run --release --example dam_break -- [--gpu] [speed_of_sound] [viscosity] [seconds] [artificial_viscosity]
+//!
+//! `--gpu` runs on the gpu backend, which needs the `gpu` feature: `cargo run --release --features gpu --example dam_break -- --gpu`
 
 use std::time::Instant;
 
-use tinysph::{Aabb, FluidParameters, Shape, Vec3, World, WorldSettings};
+use tinysph::{Aabb, Backend, FluidParameters, Shape, Vec3, World, WorldSettings};
 
 fn argument(arguments: &[String], index: usize) -> Option<f32> {
     arguments.get(index).map(|text| text.parse().unwrap_or_else(|_| panic!("not a number: {text}")))
 }
 
 fn main() -> Result<(), tinysph::SettingsError> {
-    let arguments: Vec<String> = std::env::args().collect();
+    let mut arguments: Vec<String> = std::env::args().collect();
+    let backend = if arguments.get(1).is_some_and(|argument| argument == "--gpu") {
+        arguments.remove(1);
+        Backend::Gpu
+    } else {
+        Backend::Cpu
+    };
     let mut parameters = FluidParameters::default();
     if let Some(value) = argument(&arguments, 1) {
         parameters.speed_of_sound = value;
@@ -25,7 +33,7 @@ fn main() -> Result<(), tinysph::SettingsError> {
     let seconds = argument(&arguments, 3).unwrap_or(2.0);
 
     // 1.6 x 1.0 x 0.6 m tank, a 0.48 x 0.58 x 0.56 m water column on the left and a sphere obstacle
-    let settings = WorldSettings { domain: Aabb::new(Vec3::ZERO, Vec3::new(1.6, 1.0, 0.6)), ..Default::default() };
+    let settings = WorldSettings { domain: Aabb::new(Vec3::ZERO, Vec3::new(1.6, 1.0, 0.6)), backend, ..Default::default() };
     let mut world = World::new(settings, parameters)?;
     world.add_collider(Shape::sphere(Vec3::new(1.1, 0.12, 0.3), 0.12));
     world.add_fluid(Shape::cuboid(Vec3::new(0.26, 0.31, 0.3), Vec3::new(0.24, 0.29, 0.28)), Vec3::ZERO);

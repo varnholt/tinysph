@@ -5,6 +5,9 @@
 //! frame. The solver runs on the cpu on a pool of worker threads and follows the c++ cpu solver operation by operation, so both
 //! produce the same numbers. No dependencies, no unsafe code.
 //!
+//! With the cargo feature `gpu`, [`Backend::Gpu`] runs the substeps through wgpu compute shaders instead (vulkan,
+//! metal or d3d12), using the same wgsl as the c++ gpu backend.
+//!
 //! ```
 //! use std::time::Duration;
 //! use tinysph::{Aabb, Shape, Vec3, World, WorldSettings};
@@ -21,6 +24,8 @@
 #![warn(missing_docs)]
 
 mod geometry;
+#[cfg(feature = "gpu")]
+mod gpu;
 mod kernels;
 mod math;
 mod parallel;

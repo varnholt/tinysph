@@ -65,7 +65,13 @@ fn invalid_settings_are_reported_not_crashed_on() {
     check_rejected(domain(Vec3::new(1.0, 0.0, 1.0)), SettingsError::EmptyDomain);
     check_rejected(WorldSettings { particle_spacing: 0.001, ..domain(Vec3::splat(100.0)) }, SettingsError::TooManyGridCells);
     check_rejected(WorldSettings { max_particles: 0, ..defaults }, SettingsError::ZeroParticleCap);
-    check_rejected(WorldSettings { backend: Backend::Gpu, ..defaults }, SettingsError::UnsupportedBackend);
+    if cfg!(feature = "gpu") {
+        // built in; whether a gpu is found depends on the machine, tests/gpu.rs covers it
+        let world = World::new(WorldSettings { backend: Backend::Gpu, ..defaults }, FluidParameters::default());
+        assert!(world.as_ref().err().is_none_or(|error| *error == SettingsError::GpuUnavailable), "unexpected {:?}", world.err());
+    } else {
+        check_rejected(WorldSettings { backend: Backend::Gpu, ..defaults }, SettingsError::UnsupportedBackend);
+    }
 
     assert!(World::new(WorldSettings { particle_spacing: -1.0, ..defaults }, FluidParameters::default()).is_err());
 }

@@ -7,11 +7,11 @@ use crate::math::Vec3;
 pub(crate) struct Kernels {
     support_radius: f32,
     support_radius_squared: f32,
-    poly6_factor: f32,               // 315 / (64 pi h^9)
-    spiky_gradient_factor: f32,      // -45 / (pi h^6)
-    viscosity_laplacian_factor: f32, // 45 / (pi h^6)
-    cohesion_factor: f32,            // 32 / (pi h^9)
-    cohesion_offset: f32,            // h^6 / 64
+    pub(crate) poly6_factor: f32,               // 315 / (64 pi h^9)
+    pub(crate) spiky_gradient_factor: f32,      // -45 / (pi h^6)
+    pub(crate) viscosity_laplacian_factor: f32, // 45 / (pi h^6)
+    pub(crate) cohesion_factor: f32,            // 32 / (pi h^9)
+    pub(crate) cohesion_offset: f32,            // h^6 / 64
 }
 
 impl Kernels {
