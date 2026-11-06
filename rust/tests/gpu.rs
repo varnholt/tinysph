@@ -149,3 +149,33 @@ fn emitters_outgrow_the_gpu_buffers() {
     println!("   {} particles emitted, centers of mass {offset:.2e} m apart", gpu.particle_count());
     assert!(offset < 0.005, "centers of mass {offset:.4} m apart");
 }
+
+#[test]
+fn worlds_on_two_threads_are_independent() {
+    if !gpu_available() {
+        return;
+    }
+    // all worlds share one device; two of them stepping at the same time must not disturb each other
+    let mut cpu = make_mixed_scene(Backend::Cpu);
+    for _ in 0..30 {
+        cpu.step_seconds(frame_seconds(), DEFAULT_MAX_SUBSTEPS);
+    }
+    let cpu_center = center_of_mass(&cpu);
+    let cpu_speed = mean_speed(&cpu);
+    let run = || {
+        let mut gpu = make_mixed_scene(Backend::Gpu);
+        for _ in 0..30 {
+            gpu.step_seconds(frame_seconds(), DEFAULT_MAX_SUBSTEPS);
+        }
+        ((center_of_mass(&gpu) - cpu_center).length(), mean_speed(&gpu))
+    };
+    let results = std::thread::scope(|scope| {
+        let threads: Vec<_> = (0..2).map(|_| scope.spawn(run)).collect();
+        threads.into_iter().map(|thread| thread.join().unwrap()).collect::<Vec<_>>()
+    });
+    for (index, (offset, gpu_speed)) in results.into_iter().enumerate() {
+        println!("   world {index}: center of mass {offset:.4} m from the cpu, mean speed cpu {cpu_speed:.3} gpu {gpu_speed:.3} m/s");
+        assert!(offset < 0.005, "world {index}: centers of mass {offset:.4} m apart");
+        assert!((cpu_speed - gpu_speed).abs() < 0.03 * cpu_speed, "world {index}: mean speed cpu {cpu_speed:.3}, gpu {gpu_speed:.3} m/s");
+    }
+}

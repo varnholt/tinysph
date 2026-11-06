@@ -40,9 +40,36 @@ mod blocking {
         pollster::block_on(future)
     }
 
-    /// Blocks until the submitted work is done and its callbacks, like buffer mappings, have run.
+    /// Blocks until the submitted work is done.
     pub(super) fn wait_for_queue(device: &wgpu::Device) -> bool {
         device.poll(wgpu::PollType::wait_indefinitely()).is_ok()
+    }
+
+    /// Blocks until a buffer mapping requested after `submission` has completed, and returns whether it succeeded.
+    ///
+    /// Worlds on other threads share the device and poll it too. Any of those polls may pick up this mapping and run
+    /// its callback, possibly while this thread's own poll has already returned, so the result comes through a channel
+    /// that is waited on, not checked once.
+    pub(super) fn wait_for_mapping(
+        device: &wgpu::Device,
+        submission: wgpu::SubmissionIndex,
+        mapping: &std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    ) -> bool {
+        if device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: None }).is_err() {
+            return false;
+        }
+        // keep polling while waiting, so the callback runs even if no other thread polls again
+        loop {
+            match mapping.recv_timeout(std::time::Duration::from_millis(1)) {
+                Ok(result) => return result.is_ok(),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if device.poll(wgpu::PollType::Poll).is_err() {
+                        return false;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -247,18 +274,19 @@ impl Context {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &pipeline.layout, entries: &entries })
     }
 
-    fn submit(&self, encoder: wgpu::CommandEncoder) {
-        self.queue.submit([encoder.finish()]);
+    fn submit(&self, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+        self.queue.submit([encoder.finish()])
     }
 
-    /// Maps the first `size` bytes of a readback buffer, blocks until the gpu has written them and hands them to `read`.
-    fn read_back(&self, buffer: &wgpu::Buffer, size: u64, read: impl FnOnce(&[u8])) {
+    /// Maps the first `size` bytes of a readback buffer that `submission` writes, blocks until the gpu has written them
+    /// and hands them to `read`.
+    fn read_back(&self, submission: wgpu::SubmissionIndex, buffer: &wgpu::Buffer, size: u64, read: impl FnOnce(&[u8])) {
         let (sender, receiver) = mpsc::channel();
         buffer.map_async(wgpu::MapMode::Read, ..size, move |result| {
             // the receiver only goes away if waiting failed, then nobody needs the result
             let _ = sender.send(result);
         });
-        let mapped = blocking::wait_for_queue(&self.device) && matches!(receiver.try_recv(), Ok(Ok(())));
+        let mapped = blocking::wait_for_mapping(&self.device, submission, &receiver);
         if !mapped {
             self.report_error("mapping a readback buffer failed");
             return;
@@ -568,7 +596,7 @@ impl GpuSolver {
             let mut encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             encoder.copy_buffer_to_buffer(&self.particles.positions, 0, &particles.positions, 0, size);
             encoder.copy_buffer_to_buffer(&self.particles.velocities, 0, &particles.velocities, 0, size);
-            self.context.submit(encoder);
+            let _ = self.context.submit(encoder);
         }
 
         self.particles = particles;
@@ -756,11 +784,11 @@ impl GpuSolver {
             self.dispatch(&mut pass, &context.integrate, &groups.integrate, count, PARTICLE_WORKGROUP_SIZE);
         }
         encoder.copy_buffer_to_buffer(&self.statistics, 0, &self.statistics_readback, 0, STATISTICS_SIZE);
-        context.submit(encoder);
+        let submission = context.submit(encoder);
 
         // the next time step depends on these two maxima, so this is the one sync point per substep
         let mut maxima = [0.0f32; 2];
-        context.read_back(&self.statistics_readback, STATISTICS_SIZE, |data| {
+        context.read_back(submission, &self.statistics_readback, STATISTICS_SIZE, |data| {
             maxima = [read_f32(data, 0), read_f32(data, 4)];
         });
         self.max_acceleration = maxima[0].sqrt();
@@ -786,11 +814,11 @@ impl GpuSolver {
             let density_bytes = density_count as u64 * VEC2_SIZE;
             encoder.copy_buffer_to_buffer(&particles.density_pressure, 0, &particles.readback, density_offset, density_bytes);
         }
-        context.submit(encoder);
+        let submission = context.submit(encoder);
 
         let readback_size = self.capacity as u64 * (2 * VEC4_SIZE + VEC2_SIZE);
         let (positions, velocities, densities) = solver.particles_mut();
-        context.read_back(&particles.readback, readback_size, |data| {
+        context.read_back(submission, &particles.readback, readback_size, |data| {
             let (velocity_offset, density_offset) = (velocity_offset as usize, density_offset as usize);
             for index in 0..device_count {
                 positions[index] = read_vec3(data, 16 * index);
