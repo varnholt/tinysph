@@ -10,7 +10,7 @@ CPU solver operation by operation, and CI holds the two to it: the crate replays
 and compares every recorded frame.
 
 - no dependencies and no `unsafe`
-- multithreaded on the CPU with `std::thread::scope`; results do not depend on the thread count
+- multithreaded on the CPU with a pool of worker threads that lives as long as the world (std only, no `unsafe`); results do not depend on the thread count
 - the same API as the C++ library, with `Result`s instead of exceptions and typed handles that are never reused
 - the GPU backend of the C++ library is not ported yet; `Backend::Gpu` is rejected with `SettingsError::UnsupportedBackend`
 

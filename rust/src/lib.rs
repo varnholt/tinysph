@@ -2,7 +2,7 @@
 //! [tinysph](https://github.com/varnholt/tinysph).
 //!
 //! Create a [`World`], fill it with fluid, add colliders, force fields and emitters, and call [`World::step`] once per
-//! frame. The solver runs on the cpu on scoped threads and follows the c++ cpu solver operation by operation, so both
+//! frame. The solver runs on the cpu on a pool of worker threads and follows the c++ cpu solver operation by operation, so both
 //! produce the same numbers. No dependencies, no unsafe code.
 //!
 //! ```
