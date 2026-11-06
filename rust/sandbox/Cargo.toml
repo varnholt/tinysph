@@ -1,0 +1,33 @@
+[package]
+name = "tinysph-sandbox"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95" # egui 0.36, the first egui on wgpu 30
+description = "Interactive sandbox for tinysph: presets, a mouse tool, gpu or cpu simulation, natively and on WebGPU"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "tinysph-sandbox"
+path = "src/main.rs"
+
+[dependencies]
+tinysph = { path = "..", features = ["gpu"] }
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = "0.36"
+egui-wgpu = "0.36"
+wgpu = { version = "30.0.1", default-features = false, features = ["wgsl"] }
+bytemuck = { version = "1.21", features = ["derive"] }
+glam = { version = "0.30", features = ["bytemuck"] }
+web-time = "1.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+png = "0.17"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# exact, so that it matches the wasm-bindgen-cli version in sandbox/build_web.sh and .github/workflows/pages.yml
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "Navigator", "Gpu", "Location", "console"] }
+log = "0.4"

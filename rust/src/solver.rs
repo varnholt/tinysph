@@ -15,9 +15,9 @@
 //!
 //! The order of floating point operations follows the c++ code, so both produce the same numbers (see tests/parity.rs).
 
+use crate::clock::Instant;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::geometry::{field_acceleration, signed_distance, surface_normal};
 use crate::kernels::Kernels;

@@ -59,10 +59,45 @@ impl World {
         let solver = Solver::new(settings, parameters);
         #[cfg(feature = "gpu")]
         let gpu = match settings.backend {
-            Backend::Gpu => Some(GpuSolver::new(&solver).ok_or(SettingsError::GpuUnavailable)?),
+            Backend::Gpu => Some(Self::create_gpu(&solver)?),
             Backend::Cpu => None,
         };
-        Ok(World {
+        Ok(Self::assemble(
+            solver,
+            #[cfg(feature = "gpu")]
+            gpu,
+        ))
+    }
+
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+    fn create_gpu(solver: &Solver) -> Result<GpuSolver, SettingsError> {
+        GpuSolver::new(solver).ok_or(SettingsError::GpuUnavailable)
+    }
+
+    // a browser can only request a gpu device asynchronously
+    #[cfg(all(feature = "gpu", target_arch = "wasm32"))]
+    fn create_gpu(_solver: &Solver) -> Result<GpuSolver, SettingsError> {
+        Err(SettingsError::GpuUnavailable)
+    }
+
+    /// Like [`World::new`], but awaits the gpu device instead of blocking. In a browser (`wasm32`, on WebGPU) this is the
+    /// only way to create a world with [`Backend::Gpu`]; natively it never suspends and returns what `new` returns.
+    ///
+    /// # Errors
+    /// Those of [`World::new`].
+    #[cfg(feature = "gpu")]
+    pub async fn new_async(settings: WorldSettings, parameters: FluidParameters) -> Result<World, SettingsError> {
+        Self::validate(&settings)?;
+        let solver = Solver::new(settings, parameters);
+        let gpu = match settings.backend {
+            Backend::Gpu => Some(GpuSolver::new_async(&solver).await.ok_or(SettingsError::GpuUnavailable)?),
+            Backend::Cpu => None,
+        };
+        Ok(Self::assemble(solver, gpu))
+    }
+
+    fn assemble(solver: Solver, #[cfg(feature = "gpu")] gpu: Option<GpuSolver>) -> World {
+        World {
             solver,
             #[cfg(feature = "gpu")]
             gpu,
@@ -70,7 +105,7 @@ impl World {
             force_field_ids: Vec::new(),
             emitter_ids: Vec::new(),
             next_id: 1,
-        })
+        }
     }
 
     /// Checks settings without creating a world.
@@ -328,9 +363,22 @@ impl World {
 
     /// Like [`World::step_with_limit`], with the time given as `f32` seconds exactly as the c++ library takes it.
     pub fn step_seconds(&mut self, seconds: f32, max_substeps: u32) -> StepStatistics {
-        #[cfg(feature = "gpu")]
+        #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
         if let Some(gpu) = &mut self.gpu {
             return gpu.advance(&mut self.solver, seconds, max_substeps);
+        }
+        #[cfg(all(feature = "gpu", target_arch = "wasm32"))]
+        assert!(self.gpu.is_none(), "a gpu world in a browser steps with step_seconds_async");
+        self.solver.advance(seconds, max_substeps)
+    }
+
+    /// Like [`World::step_seconds`], but awaits the gpu instead of blocking. A browser cannot block, so there a world
+    /// with [`Backend::Gpu`] (created with [`World::new_async`]) must step with this. Natively, and for the cpu backend,
+    /// it never suspends and gives the same results as `step_seconds`.
+    #[cfg(feature = "gpu")]
+    pub async fn step_seconds_async(&mut self, seconds: f32, max_substeps: u32) -> StepStatistics {
+        if let Some(gpu) = &mut self.gpu {
+            return gpu.advance_async(&mut self.solver, seconds, max_substeps).await;
         }
         self.solver.advance(seconds, max_substeps)
     }

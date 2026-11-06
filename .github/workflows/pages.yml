@@ -1,6 +1,7 @@
 name: Web demo
 
-# builds the sandbox with emscripten; pushes to main publish it on github pages
+# builds the c++ sandbox with emscripten and the rust sandbox for webgpu (under /webgpu/); pushes to main publish them on
+# github pages
 on:
   push:
     branches: [main]
@@ -33,6 +34,22 @@ jobs:
           mkdir site
           cp build-web/sandbox/index.html build-web/sandbox/index.js build-web/sandbox/index.wasm site/
           ls -l site
+
+      # the rust sandbox on webgpu, published under /webgpu/ next to the c++ demo
+      - name: Install Rust and wasm-bindgen
+        working-directory: rust
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+          rustup default stable
+          # the same exact version as the wasm-bindgen crate in rust/sandbox/Cargo.toml
+          cargo install wasm-bindgen-cli --version 0.2.130 --locked
+
+      - name: Build the WebGPU sandbox
+        run: |
+          sh rust/sandbox/build_web.sh
+          mkdir site/webgpu
+          cp -r rust/sandbox/dist/. site/webgpu/
+          ls -lR site
 
       - uses: actions/upload-pages-artifact@v3
         with:
