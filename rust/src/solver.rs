@@ -15,12 +15,14 @@
 //!
 //! The order of floating point operations follows the c++ code, so both produce the same numbers (see tests/parity.rs).
 
+use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::geometry::{field_acceleration, signed_distance, surface_normal};
 use crate::kernels::Kernels;
 use crate::math::{Aabb, Vec3, max, min};
-use crate::parallel;
+use crate::parallel::{ChunkBuffer, Pool};
 use crate::types::{Emitter, FluidParameters, ForceField, Shape, StepStatistics, WorldSettings};
 
 /// An emitter plus the distance its last layer has travelled.
@@ -72,7 +74,9 @@ fn max_length(values: &[Vec3]) -> f32 {
     values.iter().map(|value| value.length_squared()).fold(0.0, max).sqrt()
 }
 
-pub(crate) struct Solver {
+/// Everything the parallel phases read. Shared with the worker threads through an `Arc` while a phase runs, owned by
+/// the solver alone otherwise.
+pub(crate) struct Core {
     settings: WorldSettings,
     parameters: FluidParameters,
     kernels: Kernels,
@@ -81,7 +85,6 @@ pub(crate) struct Solver {
 
     pub(crate) colliders: Vec<Shape>,
     pub(crate) fields: Vec<ForceField>,
-    pub(crate) emitters: Vec<EmitterState>,
 
     // particle data, structure of arrays
     positions: Vec<Vec3>,
@@ -94,23 +97,52 @@ pub(crate) struct Solver {
     // uniform grid, rebuilt every substep
     grid_origin: Vec3,
     grid_size: CellCoordinate,
-    cell_of_particle: Vec<u32>,
     cell_start: Vec<u32>, // particles of cell c are [cell_start[c], cell_start[c + 1])
+}
+
+pub(crate) struct Solver {
+    core: Arc<Core>,
+    pool: Pool,
+
+    pub(crate) emitters: Vec<EmitterState>,
+
+    cell_of_particle: Vec<u32>,
     sorted_order: Vec<u32>,
     cell_write_offset: Vec<u32>,
 
     scratch_positions: Vec<Vec3>,
     scratch_velocities: Vec<Vec3>,
 
+    // results of the parallel phases, per chunk
+    cell_buffer: ChunkBuffer<u32>,
+    density_buffer: ChunkBuffer<(f32, f32)>,
+    vector_buffer: ChunkBuffer<Vec3>,
+    integration_buffer: ChunkBuffer<(Vec3, Vec3)>,
+
     max_acceleration: f32,
     jitter_state: u32,
+}
+
+impl Deref for Solver {
+    type Target = Core;
+
+    fn deref(&self) -> &Core {
+        &self.core
+    }
+}
+
+impl DerefMut for Solver {
+    /// Only fails while a parallel phase runs, and the solver cannot be reached then.
+    fn deref_mut(&mut self) -> &mut Core {
+        Arc::get_mut(&mut self.core).expect("no worker holds the solver data between phases")
+    }
 }
 
 impl Solver {
     pub(crate) fn new(settings: WorldSettings, parameters: FluidParameters) -> Self {
         let spacing = settings.particle_spacing;
         let kernels = Kernels::new(spacing * settings.support_radius_factor);
-        let mut solver = Self {
+        let core = Core {
             settings,
             parameters,
             kernels,
@@ -118,7 +150,6 @@ impl Solver {
             particle_radius: spacing * 0.5,
             colliders: Vec::new(),
             fields: Vec::new(),
-            emitters: Vec::new(),
             positions: Vec::new(),
             velocities: Vec::new(),
             accelerations: Vec::new(),
@@ -127,12 +158,21 @@ impl Solver {
             normals: Vec::new(),
             grid_origin: Vec3::ZERO,
             grid_size: CellCoordinate::default(),
-            cell_of_particle: Vec::new(),
             cell_start: Vec::new(),
+        };
+        let mut solver = Self {
+            core: Arc::new(core),
+            pool: Pool::default(),
+            emitters: Vec::new(),
+            cell_of_particle: Vec::new(),
             sorted_order: Vec::new(),
             cell_write_offset: Vec::new(),
             scratch_positions: Vec::new(),
             scratch_velocities: Vec::new(),
+            cell_buffer: ChunkBuffer::default(),
+            density_buffer: ChunkBuffer::default(),
+            vector_buffer: ChunkBuffer::default(),
+            integration_buffer: ChunkBuffer::default(),
             max_acceleration: 0.0,
             jitter_state: 1,
         };
@@ -214,7 +254,8 @@ impl Solver {
         self.positions.push(position + Vec3::new(jitter_x, jitter_y, jitter_z) * jitter_amplitude);
         self.velocities.push(velocity);
         self.accelerations.push(Vec3::ZERO);
-        self.densities.push(self.settings.rest_density);
+        let rest_density = self.settings.rest_density;
+        self.densities.push(rest_density);
         self.pressures.push(0.0);
         true
     }
@@ -288,38 +329,25 @@ impl Solver {
         self.cell_write_offset = vec![0; cell_count];
     }
 
-    #[inline]
-    fn cell_coordinate(&self, position: Vec3) -> CellCoordinate {
-        let relative = (position - self.grid_origin) / self.kernels.support_radius();
-        CellCoordinate {
-            x: (relative.x.floor() as i32).clamp(0, self.grid_size.x - 1),
-            y: (relative.y.floor() as i32).clamp(0, self.grid_size.y - 1),
-            z: (relative.z.floor() as i32).clamp(0, self.grid_size.z - 1),
-        }
-    }
-
-    #[inline]
-    fn cell_index(&self, coordinate: CellCoordinate) -> usize {
-        (coordinate.z as usize * self.grid_size.y as usize + coordinate.y as usize) * self.grid_size.x as usize + coordinate.x as usize
-    }
-
     /// Sorts the particles into the grid. `step` does this itself; exposed for tests.
     pub(crate) fn rebuild_grid(&mut self) {
         let particle_count = self.positions.len();
-        let mut cell_of_particle = std::mem::take(&mut self.cell_of_particle);
-        cell_of_particle.resize(particle_count, 0);
-        parallel::fill(&mut cell_of_particle, |index| self.cell_index(self.cell_coordinate(self.positions[index])) as u32);
-        self.cell_of_particle = cell_of_particle;
+        let core = Arc::clone(&self.core);
+        self.pool
+            .map(particle_count, &mut self.cell_buffer, move |index| core.cell_index(core.cell_coordinate(core.positions[index])) as u32);
+        self.cell_of_particle.clear();
+        self.cell_of_particle.extend(self.cell_buffer.values());
 
-        self.cell_start.fill(0);
+        let core = Arc::get_mut(&mut self.core).expect("no worker holds the solver data between phases");
+        core.cell_start.fill(0);
         for &cell in &self.cell_of_particle {
-            self.cell_start[cell as usize + 1] += 1;
+            core.cell_start[cell as usize + 1] += 1;
         }
-        for index in 1..self.cell_start.len() {
-            self.cell_start[index] += self.cell_start[index - 1];
+        for index in 1..core.cell_start.len() {
+            core.cell_start[index] += core.cell_start[index - 1];
         }
         let cell_count = self.cell_write_offset.len();
-        self.cell_write_offset.copy_from_slice(&self.cell_start[..cell_count]);
+        self.cell_write_offset.copy_from_slice(&core.cell_start[..cell_count]);
         self.sorted_order.resize(particle_count, 0);
         for (particle_index, &cell) in self.cell_of_particle.iter().enumerate() {
             let write_offset = &mut self.cell_write_offset[cell as usize];
@@ -328,183 +356,56 @@ impl Solver {
         }
 
         self.scratch_positions.clear();
-        self.scratch_positions.extend(self.sorted_order.iter().map(|&source| self.positions[source as usize]));
+        self.scratch_positions.extend(self.sorted_order.iter().map(|&source| core.positions[source as usize]));
         self.scratch_velocities.clear();
-        self.scratch_velocities.extend(self.sorted_order.iter().map(|&source| self.velocities[source as usize]));
-        std::mem::swap(&mut self.positions, &mut self.scratch_positions);
-        std::mem::swap(&mut self.velocities, &mut self.scratch_velocities);
-    }
-
-    /// Calls `callback(neighbor_index, offset, distance_squared)` for every particle within h of the given particle,
-    /// including the particle itself. Requires an up to date grid.
-    #[inline]
-    pub(crate) fn for_each_neighbor(&self, particle_index: usize, mut callback: impl FnMut(usize, Vec3, f32)) {
-        let position = self.positions[particle_index];
-        let center = self.cell_coordinate(position);
-        let support_radius_squared = self.kernels.support_radius_squared();
-        let size = self.grid_size;
-        for z in (center.z - 1).max(0)..=(center.z + 1).min(size.z - 1) {
-            for y in (center.y - 1).max(0)..=(center.y + 1).min(size.y - 1) {
-                let x_first = (center.x - 1).max(0);
-                let x_last = (center.x + 1).min(size.x - 1);
-                // cells along x are contiguous, so their particles form one range
-                let first_cell = self.cell_index(CellCoordinate { x: x_first, y, z });
-                let last_cell = self.cell_index(CellCoordinate { x: x_last, y, z });
-                let begin = self.cell_start[first_cell] as usize;
-                let end = self.cell_start[last_cell + 1] as usize;
-                for (neighbor_index, neighbor_position) in self.positions[begin..end].iter().enumerate() {
-                    let offset = position - *neighbor_position;
-                    let distance_squared = offset.length_squared();
-                    if distance_squared < support_radius_squared {
-                        callback(begin + neighbor_index, offset, distance_squared);
-                    }
-                }
-            }
-        }
+        self.scratch_velocities.extend(self.sorted_order.iter().map(|&source| core.velocities[source as usize]));
+        std::mem::swap(&mut core.positions, &mut self.scratch_positions);
+        std::mem::swap(&mut core.velocities, &mut self.scratch_velocities);
     }
 
     fn compute_densities(&mut self) {
-        let mass = self.particle_mass;
-        let rest_density = self.settings.rest_density;
-        let stiffness = self.parameters.speed_of_sound * self.parameters.speed_of_sound;
-        let clamp_negative_pressure = self.parameters.clamp_negative_pressure;
-        let mut densities = std::mem::take(&mut self.densities);
-        parallel::fill(&mut densities, |particle_index| {
-            let mut density = 0.0f32;
-            self.for_each_neighbor(particle_index, |_, _, distance_squared| density += mass * self.kernels.poly6(distance_squared));
-            density
-        });
-        for (pressure, &density) in self.pressures.iter_mut().zip(&densities) {
-            *pressure = stiffness * (density - rest_density);
-            if clamp_negative_pressure {
-                *pressure = max(*pressure, 0.0);
-            }
+        let core = Arc::clone(&self.core);
+        self.pool.map(self.positions.len(), &mut self.density_buffer, move |particle_index| core.density_and_pressure(particle_index));
+        let core = Arc::get_mut(&mut self.core).expect("no worker holds the solver data between phases");
+        core.densities.clear();
+        core.pressures.clear();
+        for &(density, pressure) in self.density_buffer.values() {
+            core.densities.push(density);
+            core.pressures.push(pressure);
         }
-        self.densities = densities;
     }
 
     fn compute_normals(&mut self) {
-        let mass = self.particle_mass;
-        let support_radius = self.kernels.support_radius();
-        let mut normals = std::mem::take(&mut self.normals);
-        normals.resize(self.positions.len(), Vec3::ZERO);
-        parallel::fill(&mut normals, |particle_index| {
-            let mut normal = Vec3::ZERO;
-            self.for_each_neighbor(particle_index, |neighbor_index, offset, distance_squared| {
-                if neighbor_index != particle_index {
-                    normal += self.kernels.spiky_gradient(offset, distance_squared.sqrt()) * (mass / self.densities[neighbor_index]);
-                }
-            });
-            normal * support_radius
-        });
-        self.normals = normals;
+        let core = Arc::clone(&self.core);
+        self.pool.map(self.positions.len(), &mut self.vector_buffer, move |particle_index| core.normal(particle_index));
+        let core = Arc::get_mut(&mut self.core).expect("no worker holds the solver data between phases");
+        core.normals.clear();
+        core.normals.extend(self.vector_buffer.values());
     }
 
     fn compute_accelerations(&mut self) {
-        let mass = self.particle_mass;
-        let viscosity = self.parameters.viscosity;
-        let gravity = self.parameters.gravity;
-        let support_radius = self.kernels.support_radius();
-        let artificial_viscosity_factor = self.parameters.artificial_viscosity * self.parameters.speed_of_sound * support_radius;
-        let singularity_guard = 0.01 * support_radius * support_radius;
-        let surface_tension = self.parameters.surface_tension;
-        let rest_density = self.settings.rest_density;
-        let mut accelerations = std::mem::take(&mut self.accelerations);
-        parallel::fill(&mut accelerations, |particle_index| {
-            let density = self.densities[particle_index];
-            let pressure_term = self.pressures[particle_index] / (density * density);
-            let velocity = self.velocities[particle_index];
-            let mut pressure_acceleration = Vec3::ZERO;
-            let mut viscosity_acceleration = Vec3::ZERO;
-            let mut surface_acceleration = Vec3::ZERO;
-            self.for_each_neighbor(particle_index, |neighbor_index, offset, distance_squared| {
-                if neighbor_index == particle_index {
-                    return;
-                }
-                let distance = distance_squared.sqrt();
-                let neighbor_density = self.densities[neighbor_index];
-                let neighbor_pressure_term = self.pressures[neighbor_index] / (neighbor_density * neighbor_density);
-                let mut pair_term = pressure_term + neighbor_pressure_term;
-                let neighbor_velocity = self.velocities[neighbor_index];
-                let approach = (velocity - neighbor_velocity).dot(offset);
-                if approach < 0.0 {
-                    let average_density = 0.5 * (density + neighbor_density);
-                    pair_term -= artificial_viscosity_factor * approach / ((distance_squared + singularity_guard) * average_density);
-                }
-                pressure_acceleration -= self.kernels.spiky_gradient(offset, distance) * (mass * pair_term);
-                viscosity_acceleration +=
-                    (neighbor_velocity - velocity) * (mass * self.kernels.viscosity_laplacian(distance) / (density * neighbor_density));
-                if surface_tension > 0.0 && distance > 1e-9 {
-                    let correction = 2.0 * rest_density / (density + neighbor_density);
-                    let cohesion = offset * (mass * self.kernels.cohesion(distance) / distance);
-                    let curvature = self.normals[particle_index] - self.normals[neighbor_index];
-                    surface_acceleration -= (cohesion + curvature) * correction;
-                }
-            });
-            let mut acceleration =
-                pressure_acceleration + viscosity_acceleration * viscosity + surface_acceleration * surface_tension + gravity;
-            let position = self.positions[particle_index];
-            for field in &self.fields {
-                acceleration += field_acceleration(field, position);
-            }
-            acceleration
-        });
-        self.accelerations = accelerations;
-        self.max_acceleration = max_length(&self.accelerations);
+        let core = Arc::clone(&self.core);
+        self.pool.map(self.positions.len(), &mut self.vector_buffer, move |particle_index| core.acceleration(particle_index));
+        let core = Arc::get_mut(&mut self.core).expect("no worker holds the solver data between phases");
+        core.accelerations.clear();
+        core.accelerations.extend(self.vector_buffer.values());
+        self.max_acceleration = max_length(&core.accelerations);
     }
 
     fn integrate(&mut self, time_step: f32) {
-        let mut positions = std::mem::take(&mut self.positions);
-        let mut velocities = std::mem::take(&mut self.velocities);
-        parallel::for_each_pair(&mut positions, &mut velocities, |particle_index, position, velocity| {
-            *velocity += self.accelerations[particle_index] * time_step;
-            *position += *velocity * time_step;
-            self.resolve_collisions(position, velocity);
+        let core = Arc::clone(&self.core);
+        self.pool.map(self.positions.len(), &mut self.integration_buffer, move |particle_index| {
+            let mut velocity = core.velocities[particle_index] + core.accelerations[particle_index] * time_step;
+            let mut position = core.positions[particle_index] + velocity * time_step;
+            core.resolve_collisions(&mut position, &mut velocity);
+            (position, velocity)
         });
-        self.positions = positions;
-        self.velocities = velocities;
-    }
-
-    fn resolve_collisions(&self, position: &mut Vec3, velocity: &mut Vec3) {
-        let restitution = self.parameters.wall_restitution;
-        let friction = self.parameters.wall_friction;
-        let apply_contact = |position: &mut Vec3, velocity: &mut Vec3, normal: Vec3, penetration: f32| {
-            *position += normal * penetration;
-            let normal_speed = velocity.dot(normal);
-            if normal_speed < 0.0 {
-                let tangential_velocity = *velocity - normal * normal_speed;
-                let tangential_speed = tangential_velocity.length();
-                let normal_speed_change = -normal_speed * (1.0 + restitution);
-                let keep = if tangential_speed > 1e-9 { max(0.0, 1.0 - friction * normal_speed_change / tangential_speed) } else { 0.0 };
-                *velocity = tangential_velocity * keep - normal * (normal_speed * restitution);
-            }
-        };
-        for collider in &self.colliders {
-            let distance = signed_distance(collider, *position) - self.particle_radius;
-            if distance < 0.0 {
-                apply_contact(position, velocity, surface_normal(collider, *position), -distance);
-            }
-        }
-        let margin = Vec3::splat(self.particle_radius);
-        let lower = self.settings.domain.min + margin;
-        let upper = self.settings.domain.max - margin;
-        if position.x < lower.x {
-            apply_contact(position, velocity, Vec3::new(1.0, 0.0, 0.0), lower.x - position.x);
-        }
-        if position.x > upper.x {
-            apply_contact(position, velocity, Vec3::new(-1.0, 0.0, 0.0), position.x - upper.x);
-        }
-        if position.y < lower.y {
-            apply_contact(position, velocity, Vec3::new(0.0, 1.0, 0.0), lower.y - position.y);
-        }
-        if position.y > upper.y {
-            apply_contact(position, velocity, Vec3::new(0.0, -1.0, 0.0), position.y - upper.y);
-        }
-        if position.z < lower.z {
-            apply_contact(position, velocity, Vec3::new(0.0, 0.0, 1.0), lower.z - position.z);
-        }
-        if position.z > upper.z {
-            apply_contact(position, velocity, Vec3::new(0.0, 0.0, -1.0), position.z - upper.z);
+        let core = Arc::get_mut(&mut self.core).expect("no worker holds the solver data between phases");
+        core.positions.clear();
+        core.velocities.clear();
+        for &(position, velocity) in self.integration_buffer.values() {
+            core.positions.push(position);
+            core.velocities.push(velocity);
         }
     }
 
@@ -587,5 +488,163 @@ impl Solver {
 
     pub(crate) fn max_speed(&self) -> f32 {
         max_length(&self.velocities)
+    }
+}
+
+impl Core {
+    #[inline]
+    fn cell_coordinate(&self, position: Vec3) -> CellCoordinate {
+        let relative = (position - self.grid_origin) / self.kernels.support_radius();
+        CellCoordinate {
+            x: (relative.x.floor() as i32).clamp(0, self.grid_size.x - 1),
+            y: (relative.y.floor() as i32).clamp(0, self.grid_size.y - 1),
+            z: (relative.z.floor() as i32).clamp(0, self.grid_size.z - 1),
+        }
+    }
+
+    #[inline]
+    fn cell_index(&self, coordinate: CellCoordinate) -> usize {
+        (coordinate.z as usize * self.grid_size.y as usize + coordinate.y as usize) * self.grid_size.x as usize + coordinate.x as usize
+    }
+
+    /// Calls `callback(neighbor_index, offset, distance_squared)` for every particle within h of the given particle,
+    /// including the particle itself. Requires an up to date grid.
+    #[inline]
+    pub(crate) fn for_each_neighbor(&self, particle_index: usize, mut callback: impl FnMut(usize, Vec3, f32)) {
+        let position = self.positions[particle_index];
+        let center = self.cell_coordinate(position);
+        let support_radius_squared = self.kernels.support_radius_squared();
+        let size = self.grid_size;
+        for z in (center.z - 1).max(0)..=(center.z + 1).min(size.z - 1) {
+            for y in (center.y - 1).max(0)..=(center.y + 1).min(size.y - 1) {
+                let x_first = (center.x - 1).max(0);
+                let x_last = (center.x + 1).min(size.x - 1);
+                // cells along x are contiguous, so their particles form one range
+                let first_cell = self.cell_index(CellCoordinate { x: x_first, y, z });
+                let last_cell = self.cell_index(CellCoordinate { x: x_last, y, z });
+                let begin = self.cell_start[first_cell] as usize;
+                let end = self.cell_start[last_cell + 1] as usize;
+                for (neighbor_index, neighbor_position) in self.positions[begin..end].iter().enumerate() {
+                    let offset = position - *neighbor_position;
+                    let distance_squared = offset.length_squared();
+                    if distance_squared < support_radius_squared {
+                        callback(begin + neighbor_index, offset, distance_squared);
+                    }
+                }
+            }
+        }
+    }
+
+    fn density_and_pressure(&self, particle_index: usize) -> (f32, f32) {
+        let mass = self.particle_mass;
+        let mut density = 0.0f32;
+        self.for_each_neighbor(particle_index, |_, _, distance_squared| density += mass * self.kernels.poly6(distance_squared));
+        let mut pressure = self.parameters.speed_of_sound * self.parameters.speed_of_sound * (density - self.settings.rest_density);
+        if self.parameters.clamp_negative_pressure {
+            pressure = max(pressure, 0.0);
+        }
+        (density, pressure)
+    }
+
+    fn normal(&self, particle_index: usize) -> Vec3 {
+        let mass = self.particle_mass;
+        let mut normal = Vec3::ZERO;
+        self.for_each_neighbor(particle_index, |neighbor_index, offset, distance_squared| {
+            if neighbor_index != particle_index {
+                normal += self.kernels.spiky_gradient(offset, distance_squared.sqrt()) * (mass / self.densities[neighbor_index]);
+            }
+        });
+        normal * self.kernels.support_radius()
+    }
+
+    fn acceleration(&self, particle_index: usize) -> Vec3 {
+        let mass = self.particle_mass;
+        let viscosity = self.parameters.viscosity;
+        let gravity = self.parameters.gravity;
+        let support_radius = self.kernels.support_radius();
+        let artificial_viscosity_factor = self.parameters.artificial_viscosity * self.parameters.speed_of_sound * support_radius;
+        let singularity_guard = 0.01 * support_radius * support_radius;
+        let surface_tension = self.parameters.surface_tension;
+        let rest_density = self.settings.rest_density;
+        let density = self.densities[particle_index];
+        let pressure_term = self.pressures[particle_index] / (density * density);
+        let velocity = self.velocities[particle_index];
+        let mut pressure_acceleration = Vec3::ZERO;
+        let mut viscosity_acceleration = Vec3::ZERO;
+        let mut surface_acceleration = Vec3::ZERO;
+        self.for_each_neighbor(particle_index, |neighbor_index, offset, distance_squared| {
+            if neighbor_index == particle_index {
+                return;
+            }
+            let distance = distance_squared.sqrt();
+            let neighbor_density = self.densities[neighbor_index];
+            let neighbor_pressure_term = self.pressures[neighbor_index] / (neighbor_density * neighbor_density);
+            let mut pair_term = pressure_term + neighbor_pressure_term;
+            let neighbor_velocity = self.velocities[neighbor_index];
+            let approach = (velocity - neighbor_velocity).dot(offset);
+            if approach < 0.0 {
+                let average_density = 0.5 * (density + neighbor_density);
+                pair_term -= artificial_viscosity_factor * approach / ((distance_squared + singularity_guard) * average_density);
+            }
+            pressure_acceleration -= self.kernels.spiky_gradient(offset, distance) * (mass * pair_term);
+            viscosity_acceleration +=
+                (neighbor_velocity - velocity) * (mass * self.kernels.viscosity_laplacian(distance) / (density * neighbor_density));
+            if surface_tension > 0.0 && distance > 1e-9 {
+                let correction = 2.0 * rest_density / (density + neighbor_density);
+                let cohesion = offset * (mass * self.kernels.cohesion(distance) / distance);
+                let curvature = self.normals[particle_index] - self.normals[neighbor_index];
+                surface_acceleration -= (cohesion + curvature) * correction;
+            }
+        });
+        let mut acceleration =
+            pressure_acceleration + viscosity_acceleration * viscosity + surface_acceleration * surface_tension + gravity;
+        let position = self.positions[particle_index];
+        for field in &self.fields {
+            acceleration += field_acceleration(field, position);
+        }
+        acceleration
+    }
+
+    fn resolve_collisions(&self, position: &mut Vec3, velocity: &mut Vec3) {
+        let restitution = self.parameters.wall_restitution;
+        let friction = self.parameters.wall_friction;
+        let apply_contact = |position: &mut Vec3, velocity: &mut Vec3, normal: Vec3, penetration: f32| {
+            *position += normal * penetration;
+            let normal_speed = velocity.dot(normal);
+            if normal_speed < 0.0 {
+                let tangential_velocity = *velocity - normal * normal_speed;
+                let tangential_speed = tangential_velocity.length();
+                let normal_speed_change = -normal_speed * (1.0 + restitution);
+                let keep = if tangential_speed > 1e-9 { max(0.0, 1.0 - friction * normal_speed_change / tangential_speed) } else { 0.0 };
+                *velocity = tangential_velocity * keep - normal * (normal_speed * restitution);
+            }
+        };
+        for collider in &self.colliders {
+            let distance = signed_distance(collider, *position) - self.particle_radius;
+            if distance < 0.0 {
+                apply_contact(position, velocity, surface_normal(collider, *position), -distance);
+            }
+        }
+        let margin = Vec3::splat(self.particle_radius);
+        let lower = self.settings.domain.min + margin;
+        let upper = self.settings.domain.max - margin;
+        if position.x < lower.x {
+            apply_contact(position, velocity, Vec3::new(1.0, 0.0, 0.0), lower.x - position.x);
+        }
+        if position.x > upper.x {
+            apply_contact(position, velocity, Vec3::new(-1.0, 0.0, 0.0), position.x - upper.x);
+        }
+        if position.y < lower.y {
+            apply_contact(position, velocity, Vec3::new(0.0, 1.0, 0.0), lower.y - position.y);
+        }
+        if position.y > upper.y {
+            apply_contact(position, velocity, Vec3::new(0.0, -1.0, 0.0), position.y - upper.y);
+        }
+        if position.z < lower.z {
+            apply_contact(position, velocity, Vec3::new(0.0, 0.0, 1.0), lower.z - position.z);
+        }
+        if position.z > upper.z {
+            apply_contact(position, velocity, Vec3::new(0.0, 0.0, -1.0), position.z - upper.z);
+        }
     }
 }
