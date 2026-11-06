@@ -95,6 +95,8 @@ pub struct App {
     camera: Camera,
     render: render::Settings,
     mesher: Mesher,
+    /// the mesh surface and the snapshot generation it was built from; in a browser a step spans several frames
+    surface: (Option<u64>, std::sync::Arc<Vec<[f32; 3]>>),
     frame_ms: f32,
     last_frame: web_time::Instant,
     frame: u32,
@@ -116,13 +118,10 @@ impl App {
                 camera.pitch = (camera.pitch + options.tilt).clamp(-1.5, 1.5);
                 camera
             },
-            // the mesh surface is the c++ default; its mesher runs on one cpu thread, so the browser starts with the
-            // particle based surface
-            render: render::Settings {
-                mode: options.render_mode.unwrap_or(if web { RenderMode::FluidSurface } else { RenderMode::MeshSurface }),
-                ..Default::default()
-            },
+            // the mesh surface, as in the c++ sandbox
+            render: render::Settings { mode: options.render_mode.unwrap_or(RenderMode::MeshSurface), ..Default::default() },
             mesher: Mesher::default(),
+            surface: (None, std::sync::Arc::default()),
             parameters: FluidParameters::default(),
             spacing: 0.025,
             // one cpu thread in a browser
@@ -366,13 +365,14 @@ impl App {
         }
 
         let mesh_surface = self.render.mode == RenderMode::MeshSurface;
-        let mesher = &mut self.mesher;
+        let (mesher, surface) = (&mut self.mesher, &mut self.surface);
         let (particles, radius) = self.sim.with_snapshot(|snapshot| {
             let particles =
                 snapshot.positions.iter().zip(&snapshot.velocities).map(|(p, v)| [p.x, p.y, p.z, v.length()]).collect::<Vec<_>>();
-            if mesh_surface {
+            if mesh_surface && surface.0 != Some(snapshot.generation) {
                 let positions: Vec<V3> = snapshot.positions.iter().map(|p| to_glam(*p)).collect();
                 mesher.build(&positions, snapshot.radius * 2.0, domain_min, domain_max);
+                *surface = (Some(snapshot.generation), std::sync::Arc::new(std::mem::take(&mut mesher.vertices)));
             }
             (particles, snapshot.radius)
         });
@@ -388,7 +388,7 @@ impl App {
             particles,
             lines,
             meshes,
-            surface: if mesh_surface { std::mem::take(&mut self.mesher.vertices) } else { Vec::new() },
+            surface: if mesh_surface { self.surface.1.clone() } else { std::sync::Arc::default() },
         };
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, frame));
     }

@@ -33,9 +33,9 @@ fn main() -> eframe::Result {
             "--capture" => options.capture = Some(value().into()),
             "--zoom" => options.zoom = value().parse().unwrap_or(0.0),
             "--tilt" => options.tilt = value().parse().unwrap_or(0.0),
-            "--spheres" => options.render_mode = Some(app::RenderMode::Spheres),
-            "--surface" => options.render_mode = Some(app::RenderMode::FluidSurface),
-            "--mesh" => options.render_mode = Some(app::RenderMode::MeshSurface),
+            "--spheres" => options.render_mode = Some(crate::app::RenderMode::Spheres),
+            "--surface" => options.render_mode = Some(crate::app::RenderMode::FluidSurface),
+            "--mesh" => options.render_mode = Some(crate::app::RenderMode::MeshSurface),
             "--frames" => options.frames = value().parse::<u32>().unwrap_or(1).max(1),
             _ => {
                 eprintln!(
@@ -83,7 +83,8 @@ mod web {
         Some(js_get_raw(object, key))
     }
 
-    /// Starts the sandbox on the canvas with id `canvas`. `?preset=N` picks a preset, `?cpu` the cpu backend.
+    /// Starts the sandbox on the canvas with id `canvas`. `?preset=N` picks a preset, `?cpu` the cpu backend, and
+    /// `?spheres`, `?surface` or `?mesh` the render mode.
     #[wasm_bindgen(start)]
     pub fn start() {
         let window = web_sys::window().expect("no window");
@@ -94,6 +95,9 @@ mod web {
             match key {
                 "preset" => options.preset = value.parse().unwrap_or(0),
                 "cpu" => options.cpu = true,
+                "spheres" => options.render_mode = Some(crate::app::RenderMode::Spheres),
+                "surface" => options.render_mode = Some(crate::app::RenderMode::FluidSurface),
+                "mesh" => options.render_mode = Some(crate::app::RenderMode::MeshSurface),
                 _ => {}
             }
         }

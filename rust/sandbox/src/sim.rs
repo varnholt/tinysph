@@ -17,6 +17,8 @@ pub struct Snapshot {
     pub statistics: StepStatistics,
     /// wall time of the last step in ms, measured here (the library reports zero in a browser)
     pub step_ms: f32,
+    /// counts the updates, so that work derived from the particles can be skipped while they have not changed
+    pub generation: u64,
 }
 
 #[derive(Default)]
@@ -101,7 +103,9 @@ impl Sim {
             Ok(world) => {
                 shared.backend = Some(world.settings().backend);
                 shared.device = world.device_description().to_owned();
+                let generation = shared.snapshot.generation + 1;
                 shared.snapshot = Snapshot {
+                    generation,
                     positions: world.positions().to_vec(),
                     velocities: world.velocities().to_vec(),
                     radius: world.particle_radius(),
@@ -212,6 +216,7 @@ impl Sim {
             snapshot.radius = world.particle_radius();
             snapshot.statistics = statistics;
             snapshot.step_ms = step_ms;
+            snapshot.generation += 1;
             shared.world = Some(world);
         };
         #[cfg(not(target_arch = "wasm32"))]

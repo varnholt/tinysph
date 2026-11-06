@@ -132,8 +132,8 @@ break, a drop into a pool, two blobs in zero gravity and a fountain. It simulate
 renders like the C++ sandbox, with its shaders ported to WGSL: sky, checkered floor, lit colliders, helper lines for the
 container, emitters and force fields, and the fluid as shaded spheres, as a screen space surface from the particles
 (depth, thickness, bilateral smoothing, normals, a fresnel blend of reflection and refraction) or, by default, as a
-marching tetrahedra mesh shaded the same way. The browser starts with the particle surface, because the mesher runs on
-the CPU and has only one thread there. The panel holds the preset, play/pause/reset, the fluid parameters, particle
+marching tetrahedra mesh shaded the same way. The mesher runs on the CPU (on one thread in a browser, where it only
+rebuilds when a step has finished). The panel holds the preset, play/pause/reset, the fluid parameters, particle
 spacing, backend, render mode and statistics. Left drag pulls or pushes the
 fluid, right drag orbits, middle drag pans and the wheel zooms. It is built on egui and wgpu (eframe), so it needs a
 newer Rust than the library (1.95 for egui 0.36 on wgpu 30).
@@ -150,7 +150,7 @@ In the browser it runs the GPU solver on WebGPU: **[varnholt.github.io/tinysph/w
 next to the [C++ demo](https://varnholt.github.io/tinysph/). WebGPU is available in Chrome and Edge 113+ (Windows,
 macOS, ChromeOS, Android), Firefox 141+ on Windows and Safari 26+; elsewhere the sandbox says so in the panel and
 simulates on one CPU thread with fewer particles (0.045 m spacing, about 1,400 in the dam break). `?preset=N` picks a
-preset and `?cpu` the CPU. To build it, install the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` in the version
+preset, `?cpu` the CPU and `?spheres`, `?surface` or `?mesh` the render mode. To build it, install the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` in the version
 `sandbox/Cargo.toml` pins, then serve `sandbox/dist`:
 
 ```sh

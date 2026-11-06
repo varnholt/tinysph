@@ -147,7 +147,7 @@ pub struct Frame {
     pub lines: Vec<LineVertex>,
     pub meshes: Vec<MeshVertex>,
     /// the mesh surface, three positions per triangle
-    pub surface: Vec<[f32; 3]>,
+    pub surface: std::sync::Arc<Vec<[f32; 3]>>,
 }
 
 impl Frame {
