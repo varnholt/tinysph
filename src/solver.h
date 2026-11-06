@@ -60,10 +60,10 @@ public:
 
    [[nodiscard]] float computeTimeStep() const;
 
-   /// rief the adaptive time step for the given maximum speed and acceleration of all particles.
+   /// \brief the adaptive time step for the given maximum speed and acceleration of all particles.
    [[nodiscard]] float computeTimeStep(float max_speed, float max_acceleration) const;
 
-   /// rief fills the density and speed statistics from the current particle data.
+   /// \brief fills the density and speed statistics from the current particle data.
    void fillStatistics(StepStatistics& statistics) const;
 
    /// \brief sorts the particles into the grid. step() does this itself; exposed for tests.

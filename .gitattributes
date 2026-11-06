@@ -1,0 +1,2 @@
+tests/data/trace.txt text eol=lf
+*.wgsl text eol=lf

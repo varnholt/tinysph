@@ -58,7 +58,7 @@ public:
 
    [[nodiscard]] const WorldSettings& settings() const;
 
-   /// rief what the simulation runs on, e.g. "cpu" or "NVIDIA GeForce RTX 4070 (vulkan)".
+   /// \brief what the simulation runs on, e.g. "cpu" or "NVIDIA GeForce RTX 4070 (vulkan)".
    [[nodiscard]] std::string_view deviceDescription() const;
 
    [[nodiscard]] const FluidParameters& parameters() const;

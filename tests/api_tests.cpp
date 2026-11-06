@@ -315,7 +315,7 @@ TEST_CASE("an attractor pulls fluid towards it")
 namespace
 {
 
-/// rief dam break plus a box collider and every kind of force field, so each gpu code path runs.
+/// \brief dam break plus a box collider and every kind of force field, so each gpu code path runs.
 tinysph::World makeMixedScene(tinysph::Backend backend)
 {
    tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.6f, 1.0f, 0.6f}}, ._backend = backend}};
