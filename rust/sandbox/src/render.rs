@@ -120,10 +120,8 @@ struct Resources {
 /// Creates the pipelines; call once with eframe's render state.
 pub fn init(render_state: &egui_wgpu::RenderState) {
     let device = &render_state.device;
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("sandbox"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
-    });
+    let module = device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("sandbox"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
     let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("uniforms"),
         size: size_of::<Uniforms>() as u64,
@@ -200,7 +198,12 @@ pub fn init(render_state: &egui_wgpu::RenderState) {
         wgpu::PrimitiveTopology::LineList,
     );
     let buffer = |label, size, usage| {
-        device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage: usage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false })
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: usage | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
     };
     let resources = Resources {
         sphere_pipeline,
@@ -285,7 +288,9 @@ impl egui_wgpu::CallbackTrait for Frame {
 
 /// Line segments for an axis aligned box.
 pub fn box_lines(lines: &mut Vec<LineVertex>, min: V3, max: V3, color: [f32; 3]) {
-    let corner = |i: usize| V3::new(if i & 1 == 0 { min.x } else { max.x }, if i & 2 == 0 { min.y } else { max.y }, if i & 4 == 0 { min.z } else { max.z });
+    let corner = |i: usize| {
+        V3::new(if i & 1 == 0 { min.x } else { max.x }, if i & 2 == 0 { min.y } else { max.y }, if i & 4 == 0 { min.z } else { max.z })
+    };
     for a in 0..8 {
         for bit in [1, 2, 4] {
             if a & bit == 0 {

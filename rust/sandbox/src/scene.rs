@@ -58,7 +58,12 @@ pub fn preset(index: usize) -> Scene {
             scene.fluids.push((Shape::cuboid(v(0.6, 0.06, 0.6), v(0.58, 0.04, 0.58)), Vec3::ZERO));
             scene.colliders.push(Shape::cuboid(v(0.6, 0.45, 0.6), v(0.15, 0.02, 0.15)));
             scene.emitters.push(Emitter { position: v(0.6, 0.15, 0.6), velocity: v(0.0, 3.0, 0.0), radius: 0.04, enabled: true });
-            scene.fields.push(ForceField::Vortex(Vortex { position: v(0.6, 0.5, 0.6), axis: v(0.0, 1.0, 0.0), strength: 4.0, radius: 0.5 }));
+            scene.fields.push(ForceField::Vortex(Vortex {
+                position: v(0.6, 0.5, 0.6),
+                axis: v(0.0, 1.0, 0.0),
+                strength: 4.0,
+                radius: 0.5,
+            }));
             scene
         }
     }

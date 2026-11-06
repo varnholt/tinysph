@@ -197,7 +197,12 @@ impl App {
             ui.label(format!("particles: {}", snapshot.positions.len()));
             ui.label(format!("substeps: {}, time step {:.2} ms", statistics.substeps, statistics.time_step * 1000.0));
             ui.label(format!("max density ratio: {:.3}", statistics.max_density_ratio));
-            ui.label(format!("step: {:.1} ms, frame: {:.1} ms ({:.0} fps)", snapshot.step_ms, self.frame_ms, 1000.0 / self.frame_ms.max(0.01)));
+            ui.label(format!(
+                "step: {:.1} ms, frame: {:.1} ms ({:.0} fps)",
+                snapshot.step_ms,
+                self.frame_ms,
+                1000.0 / self.frame_ms.max(0.01)
+            ));
         });
         if reset {
             self.reset();
@@ -206,7 +211,8 @@ impl App {
 
     /// The point under the cursor on the plane through the camera target that faces the camera.
     fn mouse_point(&self, rect: egui::Rect, pointer: egui::Pos2) -> Option<V3> {
-        let ndc = glam::Vec2::new((pointer.x - rect.min.x) / rect.width() * 2.0 - 1.0, 1.0 - (pointer.y - rect.min.y) / rect.height() * 2.0);
+        let ndc =
+            glam::Vec2::new((pointer.x - rect.min.x) / rect.width() * 2.0 - 1.0, 1.0 - (pointer.y - rect.min.y) / rect.height() * 2.0);
         let inverse = (Camera::projection(rect.aspect_ratio()) * self.camera.view()).inverse();
         let near = inverse.project_point3(ndc.extend(0.0));
         let far = inverse.project_point3(ndc.extend(1.0));
@@ -226,7 +232,9 @@ impl App {
         // camera
         let delta = response.drag_delta();
         let tool_active = self.tool != Tool::Off && response.dragged_by(egui::PointerButton::Primary);
-        if response.dragged_by(egui::PointerButton::Secondary) || (self.tool == Tool::Off && response.dragged_by(egui::PointerButton::Primary)) {
+        if response.dragged_by(egui::PointerButton::Secondary)
+            || (self.tool == Tool::Off && response.dragged_by(egui::PointerButton::Primary))
+        {
             self.camera.yaw -= delta.x * 0.008;
             self.camera.pitch = (self.camera.pitch + delta.y * 0.008).clamp(-1.5, 1.5);
         }
@@ -242,12 +250,16 @@ impl App {
 
         // mouse tool
         self.attractor = None;
-        if tool_active && self.options.capture.is_none() {
-            if let Some(point) = response.interact_pointer_pos().and_then(|pointer| self.mouse_point(rect, pointer)) {
-                let sign = if self.tool == Tool::Pull { 1.0 } else { -1.0 };
-                self.attractor =
-                    Some(Attractor { position: Vec3::new(point.x, point.y, point.z), strength: self.tool_strength * sign, radius: self.tool_radius });
-            }
+        if tool_active
+            && self.options.capture.is_none()
+            && let Some(point) = response.interact_pointer_pos().and_then(|pointer| self.mouse_point(rect, pointer))
+        {
+            let sign = if self.tool == Tool::Pull { 1.0 } else { -1.0 };
+            self.attractor = Some(Attractor {
+                position: Vec3::new(point.x, point.y, point.z),
+                strength: self.tool_strength * sign,
+                radius: self.tool_radius,
+            });
         }
 
         // lines: domain, colliders, mouse tool
@@ -268,7 +280,8 @@ impl App {
         }
 
         let (particles, radius) = self.sim.with_snapshot(|snapshot| {
-            let particles = snapshot.positions.iter().zip(&snapshot.velocities).map(|(p, v)| [p.x, p.y, p.z, v.length()]).collect::<Vec<_>>();
+            let particles =
+                snapshot.positions.iter().zip(&snapshot.velocities).map(|(p, v)| [p.x, p.y, p.z, v.length()]).collect::<Vec<_>>();
             (particles, snapshot.radius)
         });
         let frame = Frame {

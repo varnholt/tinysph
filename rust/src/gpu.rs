@@ -9,10 +9,13 @@
 //! difference is the order of particles inside a grid cell, which depends on the order of atomic operations, so results
 //! match the cpu up to float round-off.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
 use crate::clock::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
+use std::sync::{Arc, Weak};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Mutex, PoisonError};
 
 use crate::math::{Vec3, max, min};
 use crate::solver::Solver;
@@ -77,10 +80,9 @@ mod blocking {
 /// Waiting for the gpu in a browser: nothing may block there, the browser resolves buffer mappings between tasks.
 #[cfg(target_arch = "wasm32")]
 mod webgpu {
-    use std::cell::RefCell;
     use std::future::Future;
     use std::pin::Pin;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex, PoisonError};
     use std::task::{Context, Poll, Waker};
 
     #[derive(Default)]
@@ -90,12 +92,12 @@ mod webgpu {
     }
 
     /// Resolves when a buffer mapping has completed, with whether it succeeded.
-    pub(super) struct Mapping(Rc<RefCell<Slot>>);
+    pub(super) struct Mapping(Arc<Mutex<Slot>>);
 
     impl Future for Mapping {
         type Output = bool;
         fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<bool> {
-            let mut slot = self.0.borrow_mut();
+            let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(result) = slot.result {
                 return Poll::Ready(result);
             }
@@ -106,10 +108,10 @@ mod webgpu {
 
     /// Requests a read mapping of the first `size` bytes of `buffer`.
     pub(super) fn map(buffer: &wgpu::Buffer, size: u64) -> Mapping {
-        let slot = Rc::new(RefCell::new(Slot::default()));
-        let callback_slot = Rc::clone(&slot);
+        let slot = Arc::new(Mutex::new(Slot::default()));
+        let callback_slot = Arc::clone(&slot);
         buffer.map_async(wgpu::MapMode::Read, ..size, move |result| {
-            let mut slot = callback_slot.borrow_mut();
+            let mut slot = callback_slot.lock().unwrap_or_else(PoisonError::into_inner);
             slot.result = Some(result.is_ok());
             if let Some(waker) = slot.waker.take() {
                 waker.wake();
@@ -175,6 +177,7 @@ fn backend_name(backend: wgpu::Backend) -> &'static str {
         wgpu::Backend::Metal => "metal",
         wgpu::Backend::Vulkan => "vulkan",
         wgpu::Backend::Gl => "opengl",
+        wgpu::Backend::BrowserWebGpu => "webgpu",
         _ => "unknown api",
     }
 }
@@ -285,7 +288,9 @@ impl Context {
         }));
 
         let info = adapter.get_info();
-        let description = format!("{} ({})", info.name, backend_name(info.backend));
+        // browsers do not always tell the adapter's name
+        let name = if info.name.is_empty() { "browser gpu" } else { &info.name };
+        let description = format!("{name} ({})", backend_name(info.backend));
 
         let common = shader!("common");
         let with_common = |pass: &str| format!("{common}{pass}");
@@ -478,7 +483,6 @@ impl GpuSolver {
     }
 
     fn with_context(solver: &Solver, context: Arc<Context>) -> Option<Self> {
-
         // the largest buffers must fit into one binding
         let limits = &context.limits;
         let largest_binding = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
@@ -892,10 +896,11 @@ impl GpuSolver {
 
         // the next time step depends on these two maxima, so this is the one sync point per substep
         let mut maxima = [0.0f32; 2];
-        context.read_back(submission, &self.statistics_readback, STATISTICS_SIZE, |data| {
-            maxima = [read_f32(data, 0), read_f32(data, 4)];
-        })
-        .await;
+        context
+            .read_back(submission, &self.statistics_readback, STATISTICS_SIZE, |data| {
+                maxima = [read_f32(data, 0), read_f32(data, 4)];
+            })
+            .await;
         self.max_acceleration = maxima[0].sqrt();
         maxima[1].sqrt()
     }
@@ -923,17 +928,18 @@ impl GpuSolver {
 
         let readback_size = self.capacity as u64 * (2 * VEC4_SIZE + VEC2_SIZE);
         let (positions, velocities, densities) = solver.particles_mut();
-        context.read_back(submission, &particles.readback, readback_size, |data| {
-            let (velocity_offset, density_offset) = (velocity_offset as usize, density_offset as usize);
-            for index in 0..device_count {
-                positions[index] = read_vec3(data, 16 * index);
-                velocities[index] = read_vec3(data, velocity_offset + 16 * index);
-            }
-            // particles emitted during the last substep keep the rest density they were created with, like on the cpu
-            for (index, density) in densities[..density_count].iter_mut().enumerate() {
-                *density = read_f32(data, density_offset + 8 * index);
-            }
-        })
-        .await;
+        context
+            .read_back(submission, &particles.readback, readback_size, |data| {
+                let (velocity_offset, density_offset) = (velocity_offset as usize, density_offset as usize);
+                for index in 0..device_count {
+                    positions[index] = read_vec3(data, 16 * index);
+                    velocities[index] = read_vec3(data, velocity_offset + 16 * index);
+                }
+                // particles emitted during the last substep keep the rest density they were created with, like on the cpu
+                for (index, density) in densities[..density_count].iter_mut().enumerate() {
+                    *density = read_f32(data, density_offset + 8 * index);
+                }
+            })
+            .await;
     }
 }

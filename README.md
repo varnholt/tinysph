@@ -10,7 +10,8 @@ the fluid as a surface with reflection and refraction, and lets you poke the wat
 
 **[Try the sandbox in your browser](https://varnholt.github.io/tinysph/)**: a reduced demo. It runs on one CPU
 thread in WebAssembly, with about 1,400 particles; the native build runs on all cores or the GPU and handles 10x-100x
-more.
+more. **[The WebGPU sandbox](https://varnholt.github.io/tinysph/webgpu/)** is the [Rust port](rust/README.md#sandbox)
+running the GPU solver in the browser, with about 9,600 particles in the dam break.
 
 | | |
 |---|---|
@@ -160,7 +161,8 @@ In the sandbox, tick "gpu" in the simulation panel or start it with `--gpu`.
 The sandbox also builds with Emscripten. CI publishes every push to `main` at
 [varnholt.github.io/tinysph](https://varnholt.github.io/tinysph/). The browser runs it on a single thread, so it starts
 with coarser particles (0.045 m spacing, about 1400 particles in the dam break); the spacing slider in the "Fluid"
-section goes finer.
+section goes finer. The Rust sandbox, which simulates on the GPU through WebGPU, is published next to it at
+[varnholt.github.io/tinysph/webgpu](https://varnholt.github.io/tinysph/webgpu/), see [rust/README.md](rust/README.md#sandbox).
 
 ```
 emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release -DTINYSPH_BUILD_TESTS=OFF -DTINYSPH_BUILD_EXAMPLES=OFF

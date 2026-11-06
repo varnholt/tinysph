@@ -79,10 +79,14 @@ println!("{}", world.device_description()); // e.g. "NVIDIA GeForce RTX 4070 (vu
 - `Backend::Gpu` needs the `gpu` feature; without it `World::new` returns `SettingsError::UnsupportedBackend`. With
   it, `World::new` returns `SettingsError::GpuUnavailable` if no adapter is found or the GPU cannot hold the buffers
   for the settings. The feature pulls in `wgpu` and `pollster` and needs Rust 1.87 (the MSRV of `wgpu`).
-- Native only for now: Vulkan, Metal or D3D12, a real GPU first and a software adapter (lavapipe, WARP) as the
-  fallback. OpenGL is left out on purpose, as in the C++ library: it would make its own context current on the
+- Vulkan, Metal or D3D12, a real GPU first and a software adapter (lavapipe, WARP) as the fallback; and WebGPU in a
+  browser (`wasm32`, see below). OpenGL is left out on purpose, as in the C++ library: it would make its own context current on the
   calling thread and break applications that render with OpenGL on it. Waiting for the GPU is kept in one small
-  module (`blocking` in `src/gpu.rs`), so a WebGPU build can await there instead.
+  module (`blocking` in `src/gpu.rs`).
+- A browser cannot block, so on `wasm32` a GPU world is created with `World::new_async` and stepped with
+  `World::step_seconds_async`, which await the device and each substep's readback (`World::new` returns
+  `GpuUnavailable` there). Both are available natively too, where they never suspend and give the same results as
+  `new` and `step_seconds`. `StepStatistics::wall_time` is zero on `wasm32`, which has no clock without JavaScript.
 - It works like the C++ GPU backend: each `step` uploads the particles, runs all substeps on the GPU and reads the
   result back. Per substep only the maximum speed and acceleration come back, for the adaptive time step. Emitters run
   on the host and append to the GPU buffers, which grow when they fill up. The rest of the API is the same for both
@@ -115,6 +119,37 @@ cargo run --release --features gpu --example dam_break -- --gpu
 `dam_break` is the headless benchmark of the C++ library (`tinysph_bench`) and prints the same lines. On a laptop with
 an NVIDIA RTX PRO 4000 Blackwell (Vulkan), 2 s of the 9614 particle dam break take about 0.75 s on the GPU in both
 Rust and C++ (`tinysph_bench --gpu`), and 3.5 s on the CPU (C++: 5 s).
+
+## Sandbox
+
+![the sandbox](docs/sandbox.png)
+
+`sandbox/` is an interactive sandbox (crate `tinysph-sandbox`, not published) with the presets of the C++ sandbox: a dam
+break, a drop into a pool, two blobs in zero gravity and a fountain. It simulates on the GPU backend (or the CPU), draws
+the particles as shaded spheres coloured by speed with the domain and colliders as lines, and has a panel for the
+preset, play/pause/reset, the fluid parameters, particle spacing, backend and statistics. Left drag pulls or pushes the
+fluid, right drag orbits, middle drag pans and the wheel zooms. It is built on egui and wgpu (eframe), so it needs a
+newer Rust than the library (1.95 for egui 0.36 on wgpu 30).
+
+```sh
+cargo run --release -p tinysph-sandbox -- [--preset N] [--cpu] [--capture <dir> [--frames N] [--ui]]
+```
+
+`--capture` steps at a fixed 60 Hz, writes every frame as `frame_NNNN.png` (without the panel unless `--ui`) and quits.
+
+In the browser it runs the GPU solver on WebGPU: **[varnholt.github.io/tinysph/webgpu](https://varnholt.github.io/tinysph/webgpu/)**,
+next to the [C++ demo](https://varnholt.github.io/tinysph/). WebGPU is available in Chrome and Edge 113+ (Windows,
+macOS, ChromeOS, Android), Firefox 141+ on Windows and Safari 26+; elsewhere the sandbox says so in the panel and
+simulates on one CPU thread with fewer particles (0.045 m spacing, about 1,400 in the dam break). `?preset=N` picks a
+preset and `?cpu` the CPU. To build it, install the `wasm32-unknown-unknown` target and the `wasm-bindgen-cli` version in
+`Cargo.lock`, then serve `sandbox/dist`:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.130 --locked
+sh sandbox/build_web.sh
+python -m http.server -d sandbox/dist 8000
+```
 
 ## Tests
 

@@ -217,3 +217,50 @@ jobs:
 
       - name: Example
         run: cargo run --release --features gpu --example dam_break -- --gpu 30 0.2 0.5
+
+  # the interactive sandbox (rust/sandbox, egui on wgpu): lint and build natively and for the browser. it needs a newer
+  # rust than the library (egui 0.36 on wgpu 30). on linux it also renders a few frames on lavapipe in xvfb
+  rust-sandbox:
+    name: Rust sandbox (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt --target wasm32-unknown-unknown
+          rustup default stable
+
+      - name: Lint
+        run: |
+          cargo fmt --all --check
+          cargo clippy -p tinysph-sandbox --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --release -p tinysph-sandbox
+
+      - name: Lint and build for the browser
+        if: runner.os == 'Linux'
+        run: |
+          cargo clippy -p tinysph-sandbox --target wasm32-unknown-unknown -- -D warnings
+          cargo build --release -p tinysph-sandbox --target wasm32-unknown-unknown
+
+      - name: Capture frames on lavapipe
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers xvfb libxkbcommon-x11-0
+          xvfb-run -a -s "-screen 0 1280x720x24" target/release/tinysph-sandbox --preset 0 --capture capture --frames 30
+          test -f capture/frame_0029.png
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: sandbox-capture
+          path: rust/capture
