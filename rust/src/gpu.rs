@@ -12,7 +12,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::time::Instant;
+use crate::clock::Instant;
 
 use crate::math::{Vec3, max, min};
 use crate::solver::Solver;
@@ -33,7 +33,8 @@ const U32_SIZE: u64 = 4;
 const PARAMS_SIZE: u64 = 144; // struct Params in common.wgsl, wgsl uniform layout rules
 const STATISTICS_SIZE: u64 = 4 * U32_SIZE;
 
-/// The one place that waits for the gpu. Natively it blocks the calling thread; a web build would await instead.
+/// The one place that waits for the gpu. Natively it blocks the calling thread; on the web (`webgpu`) it awaits.
+#[cfg(not(target_arch = "wasm32"))]
 mod blocking {
     /// Runs a future to completion on the calling thread.
     pub(super) fn wait<F: Future>(future: F) -> F::Output {
@@ -70,6 +71,51 @@ mod blocking {
                 }
             }
         }
+    }
+}
+
+/// Waiting for the gpu in a browser: nothing may block there, the browser resolves buffer mappings between tasks.
+#[cfg(target_arch = "wasm32")]
+mod webgpu {
+    use std::cell::RefCell;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::rc::Rc;
+    use std::task::{Context, Poll, Waker};
+
+    #[derive(Default)]
+    struct Slot {
+        result: Option<bool>,
+        waker: Option<Waker>,
+    }
+
+    /// Resolves when a buffer mapping has completed, with whether it succeeded.
+    pub(super) struct Mapping(Rc<RefCell<Slot>>);
+
+    impl Future for Mapping {
+        type Output = bool;
+        fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<bool> {
+            let mut slot = self.0.borrow_mut();
+            if let Some(result) = slot.result {
+                return Poll::Ready(result);
+            }
+            slot.waker = Some(context.waker().clone());
+            Poll::Pending
+        }
+    }
+
+    /// Requests a read mapping of the first `size` bytes of `buffer`.
+    pub(super) fn map(buffer: &wgpu::Buffer, size: u64) -> Mapping {
+        let slot = Rc::new(RefCell::new(Slot::default()));
+        let callback_slot = Rc::clone(&slot);
+        buffer.map_async(wgpu::MapMode::Read, ..size, move |result| {
+            let mut slot = callback_slot.borrow_mut();
+            slot.result = Some(result.is_ok());
+            if let Some(waker) = slot.waker.take() {
+                waker.wake();
+            }
+        });
+        Mapping(slot)
     }
 }
 
@@ -159,21 +205,40 @@ struct Context {
     integrate: Pipeline,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 static SHARED_CONTEXT: Mutex<Weak<Context>> = Mutex::new(Weak::new());
+
+// webgpu objects are not Send; a browser runs the world on one thread anyway
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static SHARED_CONTEXT: std::cell::RefCell<Weak<Context>> = const { std::cell::RefCell::new(Weak::new()) };
+}
 
 impl Context {
     /// The shared context, or `None` if there is no usable gpu.
+    #[cfg(target_arch = "wasm32")]
+    async fn acquire() -> Option<Arc<Context>> {
+        if let Some(context) = SHARED_CONTEXT.with(|shared| shared.borrow().upgrade()) {
+            return Some(context);
+        }
+        let context = Arc::new(Self::create().await?);
+        SHARED_CONTEXT.with(|shared| *shared.borrow_mut() = Arc::downgrade(&context));
+        Some(context)
+    }
+
+    /// The shared context, or `None` if there is no usable gpu.
+    #[cfg(not(target_arch = "wasm32"))]
     fn acquire() -> Option<Arc<Context>> {
         let mut shared = SHARED_CONTEXT.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(context) = shared.upgrade() {
             return Some(context);
         }
-        let context = Arc::new(Self::create()?);
+        let context = Arc::new(blocking::wait(Self::create())?);
         *shared = Arc::downgrade(&context);
         Some(context)
     }
 
-    fn create() -> Option<Context> {
+    async fn create() -> Option<Context> {
         // vulkan, metal and d3d12 only. the opengl backend would make its own wgl/egl context current on the calling
         // thread, which silently breaks an application that renders with opengl on that thread
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -181,14 +246,19 @@ impl Context {
         let instance = wgpu::Instance::new(instance_descriptor);
 
         // a real gpu first; the fallback is a software rasterizer (warp, lavapipe) on machines without one
-        let adapter = [false, true].into_iter().find_map(|fallback| {
+        let mut adapter = None;
+        for fallback in [false, true] {
             let options = wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: fallback,
                 ..wgpu::RequestAdapterOptions::default()
             };
-            blocking::wait(instance.request_adapter(&options)).ok()
-        })?;
+            adapter = instance.request_adapter(&options).await.ok();
+            if adapter.is_some() {
+                break;
+            }
+        }
+        let adapter = adapter?;
 
         // ask for everything the adapter can do, the defaults are tuned for the web and too small for big worlds
         let adapter_limits = adapter.limits();
@@ -200,7 +270,7 @@ impl Context {
 
         let device_descriptor =
             wgpu::DeviceDescriptor { label: Some("tinysph"), required_limits: adapter_limits, ..wgpu::DeviceDescriptor::default() };
-        let (device, queue) = match blocking::wait(adapter.request_device(&device_descriptor)) {
+        let (device, queue) = match adapter.request_device(&device_descriptor).await {
             Ok(device_and_queue) => device_and_queue,
             Err(error) => {
                 eprintln!("tinysph gpu: no device: {error}");
@@ -250,7 +320,8 @@ impl Context {
             error,
         };
 
-        // shader compile errors arrive through the error callback
+        // shader compile errors arrive through the error callback; in a browser they arrive later, as console errors
+        #[cfg(not(target_arch = "wasm32"))]
         blocking::wait_for_queue(&context.device);
         if context.error.load(Ordering::Relaxed) { None } else { Some(context) }
     }
@@ -280,13 +351,24 @@ impl Context {
 
     /// Maps the first `size` bytes of a readback buffer that `submission` writes, blocks until the gpu has written them
     /// and hands them to `read`.
-    fn read_back(&self, submission: wgpu::SubmissionIndex, buffer: &wgpu::Buffer, size: u64, read: impl FnOnce(&[u8])) {
-        let (sender, receiver) = mpsc::channel();
-        buffer.map_async(wgpu::MapMode::Read, ..size, move |result| {
-            // the receiver only goes away if waiting failed, then nobody needs the result
-            let _ = sender.send(result);
-        });
-        let mapped = blocking::wait_for_mapping(&self.device, submission, &receiver);
+    ///
+    /// Natively this never suspends; in a browser it awaits the mapping.
+    async fn read_back(&self, submission: wgpu::SubmissionIndex, buffer: &wgpu::Buffer, size: u64, read: impl FnOnce(&[u8])) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let mapped = {
+            let (sender, receiver) = mpsc::channel();
+            buffer.map_async(wgpu::MapMode::Read, ..size, move |result| {
+                // the receiver only goes away if waiting failed, then nobody needs the result
+                let _ = sender.send(result);
+            });
+            blocking::wait_for_mapping(&self.device, submission, &receiver)
+        };
+        // the browser runs submissions in order, so the mapping resolves after the submission
+        #[cfg(target_arch = "wasm32")]
+        let mapped = {
+            let _ = submission;
+            webgpu::map(buffer, size).await
+        };
         if !mapped {
             self.report_error("mapping a readback buffer failed");
             return;
@@ -380,8 +462,22 @@ pub(crate) struct GpuSolver {
 
 impl GpuSolver {
     /// `None` if no usable gpu is found, or the gpu cannot hold the buffers these settings need.
+    /// Natively; a browser can only request the device asynchronously, see [`GpuSolver::new_async`].
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn new(solver: &Solver) -> Option<Self> {
+        Self::with_context(solver, Context::acquire()?)
+    }
+
+    /// Creates the solver, awaiting the device in a browser. Natively it never suspends.
+    pub(crate) async fn new_async(solver: &Solver) -> Option<Self> {
+        #[cfg(not(target_arch = "wasm32"))]
         let context = Context::acquire()?;
+        #[cfg(target_arch = "wasm32")]
+        let context = Context::acquire().await?;
+        Self::with_context(solver, context)
+    }
+
+    fn with_context(solver: &Solver, context: Arc<Context>) -> Option<Self> {
 
         // the largest buffers must fit into one binding
         let limits = &context.limits;
@@ -428,7 +524,15 @@ impl GpuSolver {
     }
 
     /// Like [`Solver::advance`].
+    /// Blocks until the frame is done.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn advance(&mut self, solver: &mut Solver, frame_time: f32, max_substeps: u32) -> StepStatistics {
+        // natively the future never suspends, so this runs it in one go
+        blocking::wait(self.advance_async(solver, frame_time, max_substeps))
+    }
+
+    /// Runs the substeps of one frame; awaits each substep's readback in a browser, natively it never suspends.
+    pub(crate) async fn advance_async(&mut self, solver: &mut Solver, frame_time: f32, max_substeps: u32) -> StepStatistics {
         let start_time = Instant::now();
 
         self.sync_grid(solver);
@@ -449,7 +553,7 @@ impl GpuSolver {
         while remaining_time > 1e-7 && statistics.substeps < max_substeps {
             let time_step = min(solver.compute_time_step_for(max_speed, self.max_acceleration), remaining_time);
             if self.device_count > 0 {
-                max_speed = self.run_substep(solver, time_step);
+                max_speed = self.run_substep(solver, time_step).await;
                 density_count = self.device_count;
             }
 
@@ -471,7 +575,7 @@ impl GpuSolver {
             statistics.substeps += 1;
         }
 
-        self.download(solver, density_count);
+        self.download(solver, density_count).await;
         solver.fill_statistics(&mut statistics);
         statistics.wall_time = start_time.elapsed();
         statistics
@@ -737,7 +841,7 @@ impl GpuSolver {
     }
 
     /// Runs one substep on the gpu and returns the new maximum speed.
-    fn run_substep(&mut self, solver: &Solver, time_step: f32) -> f32 {
+    async fn run_substep(&mut self, solver: &Solver, time_step: f32) -> f32 {
         if self.bind_groups_dirty {
             self.bind_groups = Self::create_bind_groups(
                 &self.context,
@@ -790,13 +894,14 @@ impl GpuSolver {
         let mut maxima = [0.0f32; 2];
         context.read_back(submission, &self.statistics_readback, STATISTICS_SIZE, |data| {
             maxima = [read_f32(data, 0), read_f32(data, 4)];
-        });
+        })
+        .await;
         self.max_acceleration = maxima[0].sqrt();
         maxima[1].sqrt()
     }
 
     /// Copies positions, velocities and the densities of the first `density_count` particles back to the solver.
-    fn download(&self, solver: &mut Solver, density_count: usize) {
+    async fn download(&self, solver: &mut Solver, density_count: usize) {
         if self.device_count == 0 {
             return;
         }
@@ -828,6 +933,7 @@ impl GpuSolver {
             for (index, density) in densities[..density_count].iter_mut().enumerate() {
                 *density = read_f32(data, density_offset + 8 * index);
             }
-        });
+        })
+        .await;
     }
 }

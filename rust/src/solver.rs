@@ -17,7 +17,7 @@
 
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use std::time::Instant;
+use crate::clock::Instant;
 
 use crate::geometry::{field_acceleration, signed_distance, surface_normal};
 use crate::kernels::Kernels;
