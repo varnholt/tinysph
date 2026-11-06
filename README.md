@@ -179,6 +179,12 @@ python -m http.server -d build-web/sandbox
 | space | play / pause |
 | r | reset the scene |
 
+## Rust
+
+[`rust/`](rust) is a port of the library to Rust, published as the `tinysph` crate: the same API and the same CPU
+solver, std only and without `unsafe`. It reproduces this library's CPU results bit for bit, checked in CI against
+the reference trace in `tests/data/trace.txt` (written by `tests/trace.cpp`). See [rust/README.md](rust/README.md).
+
 ## Layout
 
 | Path | Contents |
@@ -189,6 +195,7 @@ python -m http.server -d build-web/sandbox
 | `sandbox/` | the interactive sandbox: SDL3 window, OpenGL 3.3 / GLSL ES 3.00 renderer, Dear ImGui panels |
 | `examples/` | small programs using the library |
 | `tests/` | API tests, internal tests, headless dam break benchmark |
+| `rust/` | the Rust crate |
 | `docs/` | SPH notes and the gallery images |
 
 ## Solver
