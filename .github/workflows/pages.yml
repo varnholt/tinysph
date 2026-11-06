@@ -41,8 +41,8 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
           rustup default stable
-          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
-          cargo install wasm-bindgen-cli --version "$version" --locked
+          # the same exact version as the wasm-bindgen crate in rust/sandbox/Cargo.toml
+          cargo install wasm-bindgen-cli --version 0.2.130 --locked
 
       - name: Build the WebGPU sandbox
         run: |

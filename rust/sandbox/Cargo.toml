@@ -26,7 +26,8 @@ eframe = { version = "0.36", default-features = false, features = ["wgpu", "defa
 png = "0.17"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
+# exact, so that it matches the wasm-bindgen-cli version in sandbox/build_web.sh and .github/workflows/pages.yml
+wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "Navigator", "Gpu", "Location", "console"] }
 log = "0.4"

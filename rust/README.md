@@ -141,8 +141,8 @@ In the browser it runs the GPU solver on WebGPU: **[varnholt.github.io/tinysph/w
 next to the [C++ demo](https://varnholt.github.io/tinysph/). WebGPU is available in Chrome and Edge 113+ (Windows,
 macOS, ChromeOS, Android), Firefox 141+ on Windows and Safari 26+; elsewhere the sandbox says so in the panel and
 simulates on one CPU thread with fewer particles (0.045 m spacing, about 1,400 in the dam break). `?preset=N` picks a
-preset and `?cpu` the CPU. To build it, install the `wasm32-unknown-unknown` target and the `wasm-bindgen-cli` version in
-`Cargo.lock`, then serve `sandbox/dist`:
+preset and `?cpu` the CPU. To build it, install the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` in the version
+`sandbox/Cargo.toml` pins, then serve `sandbox/dist`:
 
 ```sh
 rustup target add wasm32-unknown-unknown
