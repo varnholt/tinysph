@@ -129,7 +129,9 @@ fn emitters_outgrow_the_gpu_buffers() {
         let settings = WorldSettings { domain: Aabb::new(Vec3::ZERO, Vec3::new(1.0, 2.0, 1.0)), backend, ..Default::default() };
         let parameters = FluidParameters { gravity: Vec3::ZERO, ..Default::default() };
         let mut world = World::new(settings, parameters).unwrap();
-        world.add_emitter(Emitter { position: Vec3::new(0.5, 0.1, 0.5), velocity: Vec3::new(0.0, 3.0, 0.0), radius: 0.2, enabled: true });
+        // 3.1 m/s emits 2.07 layers of 0.025 m per frame. a whole number of layers per frame would end every frame on a
+        // layer boundary, where float round-off in the time steps decides whether the last layer is emitted
+        world.add_emitter(Emitter { position: Vec3::new(0.5, 0.1, 0.5), velocity: Vec3::new(0.0, 3.1, 0.0), radius: 0.2, enabled: true });
         for _ in 0..20 {
             world.step_seconds(frame_seconds(), DEFAULT_MAX_SUBSTEPS);
         }
