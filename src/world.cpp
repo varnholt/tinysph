@@ -105,7 +105,7 @@ struct World::Impl
       return Slots{_emitter_ids, _solver.emitters()};
    }
 
-   /// rief a world for valid settings; fails if the gpu backend finds no usable gpu.
+   /// \brief a world for valid settings; fails if the gpu backend finds no usable gpu.
    [[nodiscard]] static std::expected<std::unique_ptr<Impl>, SettingsError>
    create(const WorldSettings& settings, const FluidParameters& parameters)
    {

@@ -54,7 +54,7 @@ class Renderer
 public:
    [[nodiscard]] bool initialize();
 
-   /// rief cpu time of the last surface mesh build, zero in the other render modes
+   /// \brief cpu time of the last surface mesh build, zero in the other render modes
    [[nodiscard]] tinysph::Milliseconds meshBuildTime() const;
    void shutdown();
 

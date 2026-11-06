@@ -23,3 +23,8 @@ endforeach()
 # std::getenv reads TINYSPH_REQUIRE_GPU; msvc deprecates it in favor of _dupenv_s
 target_compile_definitions(tinysph_api_tests
                            PRIVATE $<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>)
+
+# reference data for the rust crate's parity test: tinysph_trace > tests/data/trace.txt
+add_executable(tinysph_trace trace.cpp)
+target_link_libraries(tinysph_trace PRIVATE tinysph::tinysph tinysph_warnings)
+tinysph_copy_runtime_dlls(tinysph_trace)
