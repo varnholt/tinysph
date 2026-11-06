@@ -208,8 +208,9 @@ pub enum Backend {
     /// multithreaded on the cpu
     #[default]
     Cpu,
-    /// webgpu compute shaders; not built into this version of the crate, so it is rejected with
-    /// [`SettingsError::UnsupportedBackend`]
+    /// webgpu compute shaders through wgpu (vulkan, metal or d3d12); needs the cargo feature `gpu`, without it
+    /// [`World::new`](crate::World::new) returns [`SettingsError::UnsupportedBackend`], and
+    /// [`SettingsError::GpuUnavailable`] if no usable gpu is found
     Gpu,
 }
 

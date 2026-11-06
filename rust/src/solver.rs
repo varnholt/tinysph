@@ -307,7 +307,7 @@ impl Solver {
         time_step
     }
 
-    fn fill_statistics(&self, statistics: &mut StepStatistics) {
+    pub(crate) fn fill_statistics(&self, statistics: &mut StepStatistics) {
         if !self.densities.is_empty() {
             let density_sum: f64 = self.densities.iter().map(|&density| f64::from(density)).sum();
             let rest_density = self.settings.rest_density;
@@ -409,7 +409,7 @@ impl Solver {
         }
     }
 
-    fn run_emitters(&mut self, time_step: f32) {
+    pub(crate) fn run_emitters(&mut self, time_step: f32) {
         let spacing = self.settings.particle_spacing;
         for emitter_index in 0..self.emitters.len() {
             let speed = self.emitters[emitter_index].emitter.velocity.length();
@@ -460,9 +460,28 @@ impl Solver {
         self.kernels.support_radius()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "gpu"))]
     pub(crate) fn kernels(&self) -> &Kernels {
         &self.kernels
+    }
+
+    /// Lower corner of the uniform grid; one cell beyond the domain.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn grid_origin(&self) -> Vec3 {
+        self.grid_origin
+    }
+
+    /// Cells along x, y and z.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn grid_size(&self) -> [i32; 3] {
+        [self.grid_size.x, self.grid_size.y, self.grid_size.z]
+    }
+
+    /// Positions, velocities and densities, for the gpu backend to write back what it computed.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn particles_mut(&mut self) -> (&mut [Vec3], &mut [Vec3], &mut [f32]) {
+        let core: &mut Core = self;
+        (&mut core.positions, &mut core.velocities, &mut core.densities)
     }
 
     pub(crate) fn positions(&self) -> &[Vec3] {

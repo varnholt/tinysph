@@ -9,10 +9,11 @@ This is the Rust port of the C++23 library [tinysph](https://github.com/varnholt
 CPU solver operation by operation, and CI holds the two to it: the crate replays the scenes of the C++ reference trace
 and compares every recorded frame.
 
-- no dependencies and no `unsafe`
+- no dependencies and no `unsafe` (the optional GPU backend adds `wgpu`)
 - multithreaded on the CPU with a pool of worker threads that lives as long as the world (std only, no `unsafe`); results do not depend on the thread count
 - the same API as the C++ library, with `Result`s instead of exceptions and typed handles that are never reused
-- the GPU backend of the C++ library is not ported yet; `Backend::Gpu` is rejected with `SettingsError::UnsupportedBackend`
+- an optional GPU backend (cargo feature `gpu`) on [`wgpu`](https://wgpu.rs), running the WGSL compute shaders of the
+  C++ library
 
 ## Usage
 
@@ -62,14 +63,58 @@ A `Duration` holds whole nanoseconds, so `Duration::from_secs(1) / 60` is one ul
 `world.step(1s / 60.0)` uses, and the two runs drift apart after a few hundred substeps. To reproduce C++ runs exactly,
 pass the frame time as `f32` seconds: `world.step_seconds(1.0 / 60.0, DEFAULT_MAX_SUBSTEPS)`.
 
+## GPU backend
+
+```toml
+[dependencies]
+tinysph = { version = "0.1", features = ["gpu"] }
+```
+
+```rust
+let settings = WorldSettings { backend: Backend::Gpu, ..Default::default() };
+let mut world = World::new(settings, Default::default())?; // Err(SettingsError::GpuUnavailable) without a usable gpu
+println!("{}", world.device_description()); // e.g. "NVIDIA GeForce RTX 4070 (vulkan)"
+```
+
+- `Backend::Gpu` needs the `gpu` feature; without it `World::new` returns `SettingsError::UnsupportedBackend`. With
+  it, `World::new` returns `SettingsError::GpuUnavailable` if no adapter is found or the GPU cannot hold the buffers
+  for the settings. The feature pulls in `wgpu` and `pollster` and needs Rust 1.87 (the MSRV of `wgpu`).
+- Native only for now: Vulkan, Metal or D3D12, a real GPU first and a software adapter (lavapipe, WARP) as the
+  fallback. OpenGL is left out on purpose, as in the C++ library: it would make its own context current on the
+  calling thread and break applications that render with OpenGL on it. Waiting for the GPU is kept in one small
+  module (`blocking` in `src/gpu.rs`), so a WebGPU build can await there instead.
+- It works like the C++ GPU backend: each `step` uploads the particles, runs all substeps on the GPU and reads the
+  result back. Per substep only the maximum speed and acceleration come back, for the adaptive time step. Emitters run
+  on the host and append to the GPU buffers, which grow when they fill up. The rest of the API is the same for both
+  backends. Results match the CPU up to float round-off, because the order of particles inside a grid cell depends on
+  the order of atomic operations.
+- All worlds in a process share one device and the compiled pipelines.
+
+### Shader sharing
+
+The crate uses the WGSL files of the C++ library in `../src/gpu/shaders`; there is one copy of the shader code to
+maintain. `build.rs` points `include_str!` at that directory through the `TINYSPH_SHADER_DIR` environment variable when
+the crate is built inside the repository. A published crate cannot reach files outside its directory, so `rust/shaders`
+holds a copy that `cargo package` ships and `build.rs` falls back to. `tests/shaders.rs` (which runs without the
+feature, so in every CI job) fails when the copy differs from `src/gpu/shaders`; after editing a shader, copy it over:
+
+```sh
+cp src/gpu/shaders/*.wgsl rust/shaders/
+```
+
+Without the `gpu` feature `build.rs` returns immediately, and it has no dependencies of its own.
+
 ## Examples
 
 ```sh
 cargo run --release --example hello_fluid
 cargo run --release --example dam_break -- [speed_of_sound] [viscosity] [seconds] [artificial_viscosity]
+cargo run --release --features gpu --example dam_break -- --gpu
 ```
 
-`dam_break` is the headless benchmark of the C++ library (`tinysph_bench`) and prints the same lines.
+`dam_break` is the headless benchmark of the C++ library (`tinysph_bench`) and prints the same lines. On a laptop with
+an NVIDIA RTX PRO 4000 Blackwell (Vulkan), 2 s of the 9614 particle dam break take about 0.75 s on the GPU in both
+Rust and C++ (`tinysph_bench --gpu`), and 3.5 s on the CPU (C++: 5 s).
 
 ## Tests
 
@@ -81,8 +126,11 @@ cargo run --release --example dam_break -- [speed_of_sound] [viscosity] [seconds
   prints whether positions, velocities and densities match bit for bit; on x86-64 they do for every frame.
 - `tests/api.rs` has the API tests of the C++ library, `src/tests.rs` its solver internal tests (kernels, neighbor
   search, momentum conservation, time step). Debug builds also check for integer overflow.
+- `tests/gpu.rs` (with `--features gpu`) has the GPU tests of the C++ library, with the same tolerances: one substep
+  matches the CPU, half a second of flow matches the CPU, and emitters outgrow the GPU buffers. Without a usable GPU they
+  print a note and pass, unless `TINYSPH_REQUIRE_GPU=1` is set; then they fail. CI runs them on lavapipe.
 
-Minimum supported Rust version: 1.85.
+Minimum supported Rust version: 1.85, or 1.87 with the `gpu` feature.
 
 ## License
 

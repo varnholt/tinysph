@@ -414,7 +414,9 @@ TEST_CASE("gpu: emitters outgrow the gpu buffers")
    const auto run = [](tinysph::Backend backend)
    {
       tinysph::World world{{._domain = {{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 1.0f}}, ._backend = backend}, {._gravity = {}}};
-      world.addEmitter({._position = {0.5f, 0.1f, 0.5f}, ._velocity = {0.0f, 3.0f, 0.0f}, ._radius = 0.2f});
+      // 3.1 m/s emits 2.07 layers of 0.025 m per frame. a whole number of layers per frame would end every frame on a
+      // layer boundary, where float round-off in the time steps decides whether the last layer is emitted
+      world.addEmitter({._position = {0.5f, 0.1f, 0.5f}, ._velocity = {0.0f, 3.1f, 0.0f}, ._radius = 0.2f});
       for (auto frame = 0; frame < 20; ++frame)
       {
          world.step(frame_time);

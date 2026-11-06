@@ -3,6 +3,8 @@
 use std::time::Duration;
 
 use crate::geometry::cuboid_bounds;
+#[cfg(feature = "gpu")]
+use crate::gpu::GpuSolver;
 use crate::math::{Aabb, Vec3};
 use crate::solver::{EmitterState, Solver};
 use crate::types::{
@@ -34,6 +36,8 @@ pub const DEFAULT_MAX_SUBSTEPS: u32 = 1000;
 /// A world is not thread safe in the sense that it needs `&mut self` to step; it uses multiple threads internally.
 pub struct World {
     solver: Solver,
+    #[cfg(feature = "gpu")]
+    gpu: Option<GpuSolver>, // runs the substeps when the backend is Backend::Gpu
     collider_ids: Vec<ColliderId>,      // parallel to solver.colliders
     force_field_ids: Vec<ForceFieldId>, // parallel to solver.fields
     emitter_ids: Vec<EmitterId>,        // parallel to solver.emitters
@@ -48,11 +52,20 @@ impl World {
     /// Creates a world, or tells why the settings are invalid.
     ///
     /// # Errors
-    /// The first problem [`World::validate`] finds.
+    /// The first problem [`World::validate`] finds, or [`SettingsError::GpuUnavailable`] if the gpu backend finds no
+    /// usable gpu.
     pub fn new(settings: WorldSettings, parameters: FluidParameters) -> Result<World, SettingsError> {
         Self::validate(&settings)?;
+        let solver = Solver::new(settings, parameters);
+        #[cfg(feature = "gpu")]
+        let gpu = match settings.backend {
+            Backend::Gpu => Some(GpuSolver::new(&solver).ok_or(SettingsError::GpuUnavailable)?),
+            Backend::Cpu => None,
+        };
         Ok(World {
-            solver: Solver::new(settings, parameters),
+            solver,
+            #[cfg(feature = "gpu")]
+            gpu,
             collider_ids: Vec::new(),
             force_field_ids: Vec::new(),
             emitter_ids: Vec::new(),
@@ -79,7 +92,11 @@ impl World {
         }
         match settings.backend {
             Backend::Cpu => {}
-            Backend::Gpu => return Err(SettingsError::UnsupportedBackend),
+            Backend::Gpu => {
+                if !cfg!(feature = "gpu") {
+                    return Err(SettingsError::UnsupportedBackend);
+                }
+            }
         }
         let size = settings.domain.size();
         let minimum_extent = settings.particle_spacing * 4.0;
@@ -104,9 +121,13 @@ impl World {
         self.solver.settings()
     }
 
-    /// What the simulation runs on: `"cpu"`.
+    /// What the simulation runs on: `"cpu"`, or the gpu and its graphics api, e.g. `"NVIDIA GeForce RTX 4070 (vulkan)"`.
     #[must_use]
     pub fn device_description(&self) -> &str {
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = &self.gpu {
+            return gpu.device_description();
+        }
         "cpu"
     }
 
@@ -307,6 +328,10 @@ impl World {
 
     /// Like [`World::step_with_limit`], with the time given as `f32` seconds exactly as the c++ library takes it.
     pub fn step_seconds(&mut self, seconds: f32, max_substeps: u32) -> StepStatistics {
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = &mut self.gpu {
+            return gpu.advance(&mut self.solver, seconds, max_substeps);
+        }
         self.solver.advance(seconds, max_substeps)
     }
 }

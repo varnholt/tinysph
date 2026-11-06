@@ -183,7 +183,8 @@ python -m http.server -d build-web/sandbox
 
 [`rust/`](rust) is a port of the library to Rust, published as the `tinysph` crate: the same API and the same CPU
 solver, std only and without `unsafe`. It reproduces this library's CPU results bit for bit, checked in CI against
-the reference trace in `tests/data/trace.txt` (written by `tests/trace.cpp`). See [rust/README.md](rust/README.md).
+the reference trace in `tests/data/trace.txt` (written by `tests/trace.cpp`). The optional cargo feature `gpu` adds
+the GPU backend on the `wgpu` crate, running the same WGSL shaders. See [rust/README.md](rust/README.md).
 
 ## Layout
 

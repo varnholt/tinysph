@@ -6,6 +6,7 @@
 //
 // the code lives in src/gpu/shaders/*.wgsl, which the rust crate in rust/ uses too. cmake turns each file into a
 // string constant named after it (common, assign_cells, scan, scatter, density, normals, forces, integrate).
+// rust/shaders holds a copy for the published crate; rust/tests/shaders.rs fails when the two differ.
 
 namespace tinysph::detail::shaders
 {

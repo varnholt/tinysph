@@ -148,6 +148,13 @@ jobs:
           rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy,rustfmt
           rustup default ${{ matrix.toolchain }}
 
+      # the default build has no dependencies at all; wgpu comes in only with the gpu feature
+      - name: No dependencies
+        shell: bash
+        run: |
+          cargo tree -e normal,build --prefix none
+          test "$(cargo tree -e normal,build --prefix none | wc -l)" -eq 1
+
       - name: Format and lint
         if: matrix.toolchain == 'stable'
         run: |
@@ -172,3 +179,41 @@ jobs:
         run: |
           cargo run --release --example hello_fluid
           cargo run --release --example dam_break -- 30 0.2 0.5
+
+  # the gpu feature on lavapipe (mesa's software vulkan), like the c++ "Linux GCC 14, GPU (lavapipe)" job. wgpu needs
+  # rust 1.87, so this runs on stable only; TINYSPH_REQUIRE_GPU fails the gpu tests instead of skipping them
+  rust-gpu:
+    name: Rust GPU (lavapipe)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: rust
+    env:
+      TINYSPH_REQUIRE_GPU: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lavapipe (software vulkan)
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: Lint
+        run: cargo clippy --all-targets --features gpu -- -D warnings
+
+      - name: Test in debug and release
+        run: |
+          cargo test --features gpu -- --nocapture
+          cargo test --release --features gpu -- --nocapture
+
+      - name: Docs and package
+        shell: bash
+        run: |
+          RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features gpu
+          cargo package --allow-dirty --features gpu
+
+      - name: Example
+        run: cargo run --release --features gpu --example dam_break -- --gpu 30 0.2 0.5
