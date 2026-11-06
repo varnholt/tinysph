@@ -1,0 +1,22 @@
+[package]
+name = "tinysph"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Weakly compressible SPH fluid simulation: colliders, force fields, emitters, surface tension, adaptive time steps. Multithreaded on the CPU, no dependencies, no unsafe."
+repository = "https://github.com/varnholt/tinysph"
+homepage = "https://github.com/varnholt/tinysph/tree/main/rust"
+documentation = "https://docs.rs/tinysph"
+readme = "README.md"
+license = "MIT"
+keywords = ["sph", "fluid", "simulation", "physics", "gamedev"]
+categories = ["simulation", "game-development", "science"]
+include = ["src/**/*.rs", "README.md", "LICENSE"]
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_lossless = "warn"
