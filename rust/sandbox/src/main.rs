@@ -1,8 +1,9 @@
 //! Interactive sandbox for tinysph, natively (wgpu on vulkan, metal or d3d12) and in a browser on WebGPU.
 //!
-//! `tinysph-sandbox [--preset N] [--cpu] [--capture <dir> [--frames N]]`
+//! `tinysph-sandbox [--preset N] [--cpu] [--zoom STEPS] [--tilt RADIANS] [--spheres|--surface|--mesh] [--capture <dir> [--frames N]]`
 
 mod app;
+mod mesher;
 mod render;
 mod scene;
 mod sim;
@@ -30,9 +31,16 @@ fn main() -> eframe::Result {
             "--ui" => options.ui = true,
             "--gpu" => options.cpu = false,
             "--capture" => options.capture = Some(value().into()),
+            "--zoom" => options.zoom = value().parse().unwrap_or(0.0),
+            "--tilt" => options.tilt = value().parse().unwrap_or(0.0),
+            "--spheres" => options.render_mode = Some(app::RenderMode::Spheres),
+            "--surface" => options.render_mode = Some(app::RenderMode::FluidSurface),
+            "--mesh" => options.render_mode = Some(app::RenderMode::MeshSurface),
             "--frames" => options.frames = value().parse::<u32>().unwrap_or(1).max(1),
             _ => {
-                eprintln!("usage: tinysph-sandbox [--preset N] [--cpu] [--capture <dir> [--frames N] [--ui]]");
+                eprintln!(
+                    "usage: tinysph-sandbox [--preset N] [--cpu] [--zoom STEPS] [--tilt RADIANS] [--spheres|--surface|--mesh] [--capture <dir> [--frames N] [--ui]]"
+                );
                 std::process::exit(2);
             }
         }
@@ -41,8 +49,7 @@ fn main() -> eframe::Result {
         std::fs::create_dir_all(directory).expect("cannot create the capture directory");
     }
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]).with_title("tinysph sandbox"),
-        depth_buffer: 32,
+        viewport: egui::ViewportBuilder::default().with_inner_size([1600.0, 900.0]).with_title("tinysph sandbox"),
         ..Default::default()
     };
     eframe::run_native("tinysph sandbox", native_options, Box::new(|context| Ok(Box::new(app::App::new(context, options)))))
@@ -95,7 +102,7 @@ mod web {
             .and_then(|document| document.get_element_by_id("canvas"))
             .and_then(|element| element.dyn_into::<web_sys::HtmlCanvasElement>().ok())
             .expect("no canvas with id 'canvas'");
-        let web_options = eframe::WebOptions { depth_buffer: 32, ..Default::default() };
+        let web_options = eframe::WebOptions::default();
         wasm_bindgen_futures::spawn_local(async move {
             let result = eframe::WebRunner::new()
                 .start(canvas, web_options, Box::new(|context| Ok(Box::new(crate::app::App::new(context, options)))))

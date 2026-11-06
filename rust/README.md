@@ -84,9 +84,12 @@ println!("{}", world.device_description()); // e.g. "NVIDIA GeForce RTX 4070 (vu
   calling thread and break applications that render with OpenGL on it. Waiting for the GPU is kept in one small
   module (`blocking` in `src/gpu.rs`).
 - A browser cannot block, so on `wasm32` a GPU world is created with `World::new_async` and stepped with
-  `World::step_seconds_async`, which await the device and each substep's readback (`World::new` returns
-  `GpuUnavailable` there). Both are available natively too, where they never suspend and give the same results as
-  `new` and `step_seconds`. `StepStatistics::wall_time` is zero on `wasm32`, which has no clock without JavaScript.
+  `World::step_seconds_async`, which await the device and the substeps' readbacks (`World::new` returns
+  `GpuUnavailable` there). Each readback costs a few ms of event loop latency in a browser, so there the maxima are
+  read only every 4th substep; in between the time step comes from bounds (the last acceleration times 1.25, and the
+  speed grown by it since the last readback), which only makes steps smaller. That halves the step time of the dam
+  break in Edge (about 94 ms to 35-45 ms). Natively both functions read every substep, never suspend and give the same
+  results as `new` and `step_seconds`. `StepStatistics::wall_time` is zero on `wasm32`, which has no clock without JavaScript.
 - It works like the C++ GPU backend: each `step` uploads the particles, runs all substeps on the GPU and reads the
   result back. Per substep only the maximum speed and acceleration come back, for the adaptive time step. Emitters run
   on the host and append to the GPU buffers, which grow when they fill up. The rest of the API is the same for both
@@ -125,17 +128,23 @@ Rust and C++ (`tinysph_bench --gpu`), and 3.5 s on the CPU (C++: 5 s).
 ![the sandbox](docs/sandbox.png)
 
 `sandbox/` is an interactive sandbox (crate `tinysph-sandbox`, not published) with the presets of the C++ sandbox: a dam
-break, a drop into a pool, two blobs in zero gravity and a fountain. It simulates on the GPU backend (or the CPU), draws
-the particles as shaded spheres coloured by speed with the domain and colliders as lines, and has a panel for the
-preset, play/pause/reset, the fluid parameters, particle spacing, backend and statistics. Left drag pulls or pushes the
+break, a drop into a pool, two blobs in zero gravity and a fountain. It simulates on the GPU backend (or the CPU) and
+renders like the C++ sandbox, with its shaders ported to WGSL: sky, checkered floor, lit colliders, helper lines for the
+container, emitters and force fields, and the fluid as shaded spheres, as a screen space surface from the particles
+(depth, thickness, bilateral smoothing, normals, a fresnel blend of reflection and refraction) or, by default, as a
+marching tetrahedra mesh shaded the same way. The browser starts with the particle surface, because the mesher runs on
+the CPU and has only one thread there. The panel holds the preset, play/pause/reset, the fluid parameters, particle
+spacing, backend, render mode and statistics. Left drag pulls or pushes the
 fluid, right drag orbits, middle drag pans and the wheel zooms. It is built on egui and wgpu (eframe), so it needs a
 newer Rust than the library (1.95 for egui 0.36 on wgpu 30).
 
 ```sh
-cargo run --release -p tinysph-sandbox -- [--preset N] [--cpu] [--capture <dir> [--frames N] [--ui]]
+cargo run --release -p tinysph-sandbox -- [--preset N] [--cpu] [--zoom STEPS] [--tilt RADIANS] [--spheres|--surface|--mesh]
+                                           [--capture <dir> [--frames N] [--ui]]
 ```
 
 `--capture` steps at a fixed 60 Hz, writes every frame as `frame_NNNN.png` (without the panel unless `--ui`) and quits.
+The camera and `--zoom`/`--tilt` frame the scene as in the C++ sandbox, so captures of both line up.
 
 In the browser it runs the GPU solver on WebGPU: **[varnholt.github.io/tinysph/webgpu](https://varnholt.github.io/tinysph/webgpu/)**,
 next to the [C++ demo](https://varnholt.github.io/tinysph/). WebGPU is available in Chrome and Edge 113+ (Windows,

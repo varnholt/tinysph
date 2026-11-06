@@ -3,9 +3,11 @@
 use eframe::egui_wgpu;
 use egui::{Color32, Sense};
 use glam::{Mat4, Vec3 as V3};
-use tinysph::{Attractor, Backend, FluidParameters, Shape, Vec3};
+use tinysph::{Attractor, Backend, FluidParameters, ForceField, Shape, Vec3};
 
-use crate::render::{self, Frame};
+use crate::mesher::Mesher;
+pub use crate::render::RenderMode;
+use crate::render::{self, ColorMode, Frame};
 use crate::scene::{self, PRESET_NAMES, Scene};
 use crate::sim::{Build, Sim};
 
@@ -18,6 +20,11 @@ pub struct Options {
     pub frames: u32,
     /// draw the ui panel in captured frames too
     pub ui: bool,
+    /// wheel steps towards the target, as `--zoom` in the c++ sandbox
+    pub zoom: f32,
+    /// added to the camera pitch in radians
+    pub tilt: f32,
+    pub render_mode: Option<render::RenderMode>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -26,6 +33,9 @@ enum Tool {
     Pull,
     Push,
 }
+
+/// field of view in y, radians, as in the c++ sandbox
+const FOV_Y: f32 = 0.8;
 
 struct Camera {
     yaw: f32,
@@ -40,8 +50,10 @@ fn to_glam(v: Vec3) -> V3 {
 
 impl Camera {
     fn framing(scene: &Scene) -> Self {
+        // as the c++ OrbitCamera::frame: back off until the bounding sphere of the domain fits
         let size = to_glam(scene.domain.max - scene.domain.min);
-        Camera { yaw: -0.5, pitch: 0.35, distance: size.max_element() * 2.1, target: to_glam(scene.domain.min) + size * 0.5 }
+        let distance = size.length() * 0.5 / (FOV_Y * 0.5).sin() * 0.9;
+        Camera { yaw: -0.5, pitch: 0.35, distance, target: to_glam(scene.domain.min) + size * 0.5 }
     }
 
     fn eye(&self) -> V3 {
@@ -55,7 +67,12 @@ impl Camera {
     }
 
     fn projection(aspect: f32) -> Mat4 {
-        Mat4::perspective_rh(45f32.to_radians(), aspect, 0.02, 50.0)
+        Mat4::perspective_rh(FOV_Y, aspect, render::NEAR, render::FAR)
+    }
+
+    /// The c++ wheel: every step moves 10 % closer.
+    fn zoom(&mut self, steps: f32) {
+        self.distance = (self.distance * 0.9f32.powf(steps)).clamp(0.1, 50.0);
     }
 }
 
@@ -76,6 +93,8 @@ pub struct App {
     tool_radius: f32,
     attractor: Option<Attractor>,
     camera: Camera,
+    render: render::Settings,
+    mesher: Mesher,
     frame_ms: f32,
     last_frame: web_time::Instant,
     frame: u32,
@@ -91,7 +110,19 @@ impl App {
         let web = cfg!(target_arch = "wasm32");
         let mut app = App {
             preset: options.preset % PRESET_NAMES.len(),
-            camera: Camera::framing(&scene),
+            camera: {
+                let mut camera = Camera::framing(&scene);
+                camera.zoom(options.zoom);
+                camera.pitch = (camera.pitch + options.tilt).clamp(-1.5, 1.5);
+                camera
+            },
+            // the mesh surface is the c++ default; its mesher runs on one cpu thread, so the browser starts with the
+            // particle based surface
+            render: render::Settings {
+                mode: options.render_mode.unwrap_or(if web { RenderMode::FluidSurface } else { RenderMode::MeshSurface }),
+                ..Default::default()
+            },
+            mesher: Mesher::default(),
             parameters: FluidParameters::default(),
             spacing: 0.025,
             // one cpu thread in a browser
@@ -172,6 +203,37 @@ impl App {
         ui.add(egui::Slider::new(&mut self.max_substeps, 1..=200).text("max substeps"));
 
         ui.separator();
+        ui.label("Rendering");
+        let r = &mut self.render;
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut r.mode, RenderMode::Spheres, "spheres");
+            ui.radio_value(&mut r.mode, RenderMode::FluidSurface, "fluid surface");
+            ui.radio_value(&mut r.mode, RenderMode::MeshSurface, "mesh surface");
+        });
+        if r.mode == RenderMode::Spheres {
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut r.color_mode, ColorMode::Speed, "speed");
+                ui.radio_value(&mut r.color_mode, ColorMode::Flat, "flat");
+            });
+            ui.add(egui::Slider::new(&mut r.radius_scale, 0.3..=2.0).text("radius scale"));
+            ui.add(egui::Slider::new(&mut r.speed_range, 0.5..=10.0).text("speed range (m/s)"));
+        } else {
+            if r.mode == RenderMode::FluidSurface {
+                ui.add(egui::Slider::new(&mut r.smoothing_iterations, 1..=8).text("smoothing passes"));
+                ui.add(egui::Slider::new(&mut r.smoothing_radius, 1.0..=10.0).text("smoothing radius (particle radii)"));
+            }
+            ui.add(egui::Slider::new(&mut r.refraction_strength, 0.0..=0.5).text("refraction"));
+            ui.horizontal(|ui| {
+                ui.label("fluid colour");
+                ui.color_edit_button_rgb(&mut r.fluid_color);
+            });
+            ui.add(egui::Slider::new(&mut r.absorption[0], 0.0..=10.0).text("absorption red"));
+            ui.add(egui::Slider::new(&mut r.absorption[1], 0.0..=10.0).text("absorption green"));
+            ui.add(egui::Slider::new(&mut r.absorption[2], 0.0..=10.0).text("absorption blue"));
+        }
+        ui.checkbox(&mut r.show_helpers, "helpers (container, emitters, fields)");
+        ui.checkbox(&mut r.show_floor, "floor");
+        ui.separator();
         ui.label("Mouse tool (left drag; right drag orbits, middle pans, wheel zooms)");
         ui.horizontal(|ui| {
             ui.radio_value(&mut self.tool, Tool::Off, "off");
@@ -245,7 +307,7 @@ impl App {
         }
         if response.hovered() {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-            self.camera.distance = (self.camera.distance * (-scroll * 0.002).exp()).clamp(0.2, 20.0);
+            self.camera.zoom(scroll / 50.0);
         }
 
         // mouse tool
@@ -262,35 +324,71 @@ impl App {
             });
         }
 
-        // lines: domain, colliders, mouse tool
+        // helper lines as in the c++ sandbox: container, emitters, fields, mouse tool
         let mut lines = Vec::new();
-        render::box_lines(&mut lines, to_glam(self.scene.domain.min), to_glam(self.scene.domain.max), [0.55, 0.6, 0.7]);
-        for collider in &self.scene.colliders {
-            match collider {
-                Shape::Sphere(sphere) => render::sphere_lines(&mut lines, to_glam(sphere.center), sphere.radius, [0.95, 0.75, 0.3]),
-                Shape::Cuboid(cuboid) => {
-                    let (center, half) = (to_glam(cuboid.center), to_glam(cuboid.half_extents));
-                    render::box_lines(&mut lines, center - half, center + half, [0.95, 0.75, 0.3]);
+        let (domain_min, domain_max) = (to_glam(self.scene.domain.min), to_glam(self.scene.domain.max));
+        render::box_lines(&mut lines, domain_min, domain_max, [0.85, 0.85, 0.9]);
+        let emitter_color = [0.3, 0.95, 0.4];
+        for emitter in &self.scene.emitters {
+            let direction = to_glam(emitter.velocity).normalize_or(V3::Y);
+            let position = to_glam(emitter.position);
+            render::circle_lines(&mut lines, position, direction, emitter.radius, emitter_color);
+            render::line(&mut lines, position, position + direction * 0.1, emitter_color);
+        }
+        let field_color = [0.85, 0.35, 0.9];
+        for field in &self.scene.fields {
+            match field {
+                ForceField::Attractor(attractor) => {
+                    render::sphere_lines(&mut lines, to_glam(attractor.position), attractor.radius, field_color);
                 }
+                ForceField::Vortex(vortex) => {
+                    let (position, axis) = (to_glam(vortex.position), to_glam(vortex.axis).normalize_or(V3::Y));
+                    render::circle_lines(&mut lines, position, axis, vortex.radius, field_color);
+                    render::line(&mut lines, position - axis * vortex.radius, position + axis * vortex.radius, field_color);
+                }
+                ForceField::Wind(wind) => render::box_lines(&mut lines, to_glam(wind.region.min), to_glam(wind.region.max), field_color),
             }
         }
         if let Some(attractor) = &self.attractor {
-            let color = if attractor.strength > 0.0 { [0.4, 1.0, 0.5] } else { [1.0, 0.4, 0.4] };
-            render::sphere_lines(&mut lines, to_glam(attractor.position), attractor.radius, color);
+            render::sphere_lines(&mut lines, to_glam(attractor.position), attractor.radius, [1.0, 1.0, 0.3]);
         }
 
+        // floor and solid colliders
+        let mut meshes = Vec::new();
+        if self.render.show_floor {
+            render::floor_mesh(&mut meshes, domain_min, domain_max);
+        }
+        for collider in &self.scene.colliders {
+            match collider {
+                Shape::Sphere(sphere) => render::solid_sphere(&mut meshes, to_glam(sphere.center), sphere.radius),
+                Shape::Cuboid(cuboid) => render::solid_box(&mut meshes, to_glam(cuboid.center), to_glam(cuboid.half_extents)),
+            }
+        }
+
+        let mesh_surface = self.render.mode == RenderMode::MeshSurface;
+        let mesher = &mut self.mesher;
         let (particles, radius) = self.sim.with_snapshot(|snapshot| {
             let particles =
                 snapshot.positions.iter().zip(&snapshot.velocities).map(|(p, v)| [p.x, p.y, p.z, v.length()]).collect::<Vec<_>>();
+            if mesh_surface {
+                let positions: Vec<V3> = snapshot.positions.iter().map(|p| to_glam(*p)).collect();
+                mesher.build(&positions, snapshot.radius * 2.0, domain_min, domain_max);
+            }
             (particles, snapshot.radius)
         });
+        let pixels_per_point = ui.ctx().pixels_per_point();
         let frame = Frame {
             view: self.camera.view(),
-            projection: Camera::projection(rect.aspect_ratio()),
-            radius,
-            max_speed: 3.0,
+            fov_y: FOV_Y,
+            eye: self.camera.eye(),
+            width: (rect.width() * pixels_per_point).round() as u32,
+            height: (rect.height() * pixels_per_point).round() as u32,
+            particle_radius: radius,
+            settings: self.render,
             particles,
             lines,
+            meshes,
+            surface: if mesh_surface { std::mem::take(&mut self.mesher.vertices) } else { Vec::new() },
         };
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, frame));
     }

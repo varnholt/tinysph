@@ -170,6 +170,13 @@ fn read_vec3(data: &[u8], offset: usize) -> Vec3 {
     Vec3::new(read_f32(data, offset), read_f32(data, offset + 4), read_f32(data, offset + 8))
 }
 
+/// Substeps between two readbacks of the maxima in a browser.
+#[cfg(target_arch = "wasm32")]
+const BROWSER_SUBSTEPS_PER_READBACK: u32 = 4;
+/// Factor on the last read acceleration while the maxima are not read back.
+#[cfg(target_arch = "wasm32")]
+const BROWSER_ACCELERATION_MARGIN: f32 = 1.25;
+
 fn backend_name(backend: wgpu::Backend) -> &'static str {
     // the names the c++ library prints
     match backend {
@@ -288,9 +295,14 @@ impl Context {
         }));
 
         let info = adapter.get_info();
-        // browsers do not always tell the adapter's name
-        let name = if info.name.is_empty() { "browser gpu" } else { &info.name };
-        let description = format!("{name} ({})", backend_name(info.backend));
+        // browsers often hide the adapter's name, and wgpu's webgpu backend does not always report itself as such
+        let api = if cfg!(target_arch = "wasm32") { "webgpu" } else { backend_name(info.backend) };
+        let name = info.name.trim();
+        let description = match (name.is_empty(), cfg!(target_arch = "wasm32")) {
+            (true, true) => "WebGPU".to_owned(),
+            (true, false) => format!("gpu ({api})"),
+            (false, _) => format!("{name} ({api})"),
+        };
 
         let common = shader!("common");
         let with_common = |pass: &str| format!("{common}{pass}");
@@ -554,11 +566,38 @@ impl GpuSolver {
         let mut density_count = 0; // particles whose density the gpu has computed
         let mut statistics = StepStatistics::default();
         let mut remaining_time = frame_time;
+        #[cfg(target_arch = "wasm32")]
+        let (mut since_readback, mut since_readback_time) = (0u32, 0.0f32);
         while remaining_time > 1e-7 && statistics.substeps < max_substeps {
+            #[cfg(not(target_arch = "wasm32"))]
             let time_step = min(solver.compute_time_step_for(max_speed, self.max_acceleration), remaining_time);
+            #[cfg(not(target_arch = "wasm32"))]
             if self.device_count > 0 {
                 max_speed = self.run_substep(solver, time_step).await;
                 density_count = self.device_count;
+            }
+            // in a browser every readback costs a few ms of event loop latency, so the maxima are only read every
+            // BROWSER_SUBSTEPS_PER_READBACK substeps. in between the time step comes from bounds: the acceleration
+            // with a margin, and the speed grown by that acceleration since the last readback. that only ever makes
+            // the step smaller than the exact one would be.
+            #[cfg(target_arch = "wasm32")]
+            let time_step = {
+                let acceleration = self.max_acceleration * if since_readback > 0 { BROWSER_ACCELERATION_MARGIN } else { 1.0 };
+                let speed = max_speed + acceleration * since_readback_time;
+                min(solver.compute_time_step_for(speed, acceleration), remaining_time)
+            };
+            #[cfg(target_arch = "wasm32")]
+            if self.device_count > 0 {
+                let submission = self.submit_substep(solver, time_step);
+                density_count = self.device_count;
+                since_readback += 1;
+                since_readback_time += time_step;
+                let last = remaining_time - time_step <= 1e-7 || statistics.substeps + 1 >= max_substeps;
+                if since_readback >= BROWSER_SUBSTEPS_PER_READBACK || last {
+                    max_speed = self.read_maxima(submission).await;
+                    since_readback = 0;
+                    since_readback_time = 0.0;
+                }
             }
 
             // emitters run on the host and append to the gpu buffers
@@ -845,7 +884,14 @@ impl GpuSolver {
     }
 
     /// Runs one substep on the gpu and returns the new maximum speed.
+    #[cfg(not(target_arch = "wasm32"))]
     async fn run_substep(&mut self, solver: &Solver, time_step: f32) -> f32 {
+        let submission = self.submit_substep(solver, time_step);
+        self.read_maxima(submission).await
+    }
+
+    /// Records and submits one substep; its maxima land in the statistics readback buffer.
+    fn submit_substep(&mut self, solver: &Solver, time_step: f32) -> wgpu::SubmissionIndex {
         if self.bind_groups_dirty {
             self.bind_groups = Self::create_bind_groups(
                 &self.context,
@@ -892,11 +938,14 @@ impl GpuSolver {
             self.dispatch(&mut pass, &context.integrate, &groups.integrate, count, PARTICLE_WORKGROUP_SIZE);
         }
         encoder.copy_buffer_to_buffer(&self.statistics, 0, &self.statistics_readback, 0, STATISTICS_SIZE);
-        let submission = context.submit(encoder);
+        context.submit(encoder)
+    }
 
-        // the next time step depends on these two maxima, so this is the one sync point per substep
+    /// Awaits the maxima of the substep `submission`, keeps the acceleration and returns the speed.
+    async fn read_maxima(&mut self, submission: wgpu::SubmissionIndex) -> f32 {
+        // the next time step depends on these two maxima, so natively this is the one sync point per substep
         let mut maxima = [0.0f32; 2];
-        context
+        self.context
             .read_back(submission, &self.statistics_readback, STATISTICS_SIZE, |data| {
                 maxima = [read_f32(data, 0), read_f32(data, 4)];
             })
